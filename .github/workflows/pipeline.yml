@@ -19,9 +19,13 @@ jobs:
           cache: 'pip'
 
       # pyenchant (hunspell wrapper) requires the system enchant library
-      # and the en_US hunspell dictionary
+      # and the en_US hunspell dictionary.
+      # apt-get update is required first — runner package lists are often stale,
+      # causing 404 errors when pulling dependencies like libglib2.0.
       - name: Install system dependencies
-        run: sudo apt-get install -y libenchant-2-dev hunspell-en-us
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libenchant-2-dev hunspell-en-us
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
