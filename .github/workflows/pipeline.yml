@@ -1,0 +1,79 @@
+name: Names Enrichment Pipeline
+
+on:
+  workflow_dispatch:  # Manual trigger only — run from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6-hour cap; langdetect alone takes ~2-3 hours
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # pyenchant (hunspell wrapper) requires the system enchant library
+      # and the en_US hunspell dictionary
+      - name: Install system dependencies
+        run: sudo apt-get install -y libenchant-2-dev hunspell-en-us
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create output directories
+        run: mkdir -p data logs
+
+      # ── Step 1: Build base dataset ──────────────────────────────────────────
+      # Rebuilds names_base.parquet from scratch using the names_dataset
+      # library. Keeps large data files out of the repository.
+      - name: Step 1 — Build base dataset
+        run: python scripts/database_v2.py
+
+      # ── Step 2: Add script detection and Latin transliteration ─────────────
+      # Adds name_script (Unicode script family) and name_latin (anyascii
+      # transliteration) columns. Both enrich_names.py and spellcheck_names.py
+      # depend on name_latin being present before they run.
+      - name: Step 2 — Preprocess (script detection + transliteration)
+        run: python scripts/preprocess_names.py
+
+      # ── Step 3: Agreement scoring ───────────────────────────────────────────
+      # Runs ethnicolr (pass 1: original names, pass 2: name_latin for
+      # non-Latin names), langdetect on all names, and nationalize.io on a
+      # stratified sample of 1,000. Populates agreement_score and all eth_*
+      # and langdetect_* columns.
+      - name: Step 3 — Enrich (ethnicolr + langdetect + nationalize.io)
+        env:
+          NATIONALIZE_KEY: ${{ secrets.NATIONALIZE_KEY }}
+        run: python scripts/enrich_names.py
+
+      # ── Step 4: Spell-check bias analysis ───────────────────────────────────
+      # Runs hunspell (en_US) and pyspellchecker on both the original name
+      # (Condition A) and the Latin transliteration (Condition B) for every
+      # name. Generates the bias report in logs/.
+      - name: Step 4 — Spell-check bias analysis
+        run: python scripts/spellcheck_names.py
+
+      # ── Artifacts ────────────────────────────────────────────────────────────
+      # Upload with if: always() so partial results are preserved even if a
+      # step fails part-way through a long run.
+      - name: Upload enriched dataset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: names-enriched-${{ github.run_id }}
+          path: data/names_base.parquet
+          retention-days: 90
+
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
