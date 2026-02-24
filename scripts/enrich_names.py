@@ -320,20 +320,30 @@ def main():
 
     country_map = build_country_map()
 
+    def checkpoint(label):
+        """Save current state of df to parquet immediately after a step completes.
+        If a later step crashes, this checkpoint is already on disk and will be
+        captured by the GitHub Actions artifact upload (if: always())."""
+        print(f"  Checkpoint: saving after {label}…", flush=True)
+        df.to_parquet(PARQUET_PATH, index=False)
+        print(f"  Checkpoint saved to {PARQUET_PATH}", flush=True)
+
     # ── 1. ethnicolr ──────────────────────────────────────────────────────────
     print("[1/3] ethnicolr — running on all names…")
     t0 = time.time()
     df = run_ethnicolr(df)
-    print(f"  Done in {time.time() - t0:.0f}s\n")
+    print(f"  Done in {time.time() - t0:.0f}s")
+    checkpoint("ethnicolr")
 
     # ── 2. langdetect ─────────────────────────────────────────────────────────
-    print("[2/3] langdetect — running on all names…")
+    print("\n[2/3] langdetect — running on all names…")
     t0 = time.time()
     df = run_langdetect(df)
-    print(f"  Done in {time.time() - t0:.0f}s\n")
+    print(f"  Done in {time.time() - t0:.0f}s")
+    checkpoint("langdetect")
 
     # ── 3. nationalize.io ─────────────────────────────────────────────────────
-    print("[3/3] nationalize.io — querying sample…")
+    print("\n[3/3] nationalize.io — querying sample…")
     if NATIONALIZE_KEY:
         print(f"  Using API key (1 000 req/day limit)")
     else:
@@ -343,7 +353,7 @@ def main():
     df = run_nationalize_sample(df, country_map)
     print(f"  Done in {time.time() - t0:.0f}s\n")
 
-    # ── Save ──────────────────────────────────────────────────────────────────
+    # ── Final save ────────────────────────────────────────────────────────────
     print(f"Saving to {PARQUET_PATH}…", flush=True)
     df.to_parquet(PARQUET_PATH, index=False)
     print("Saved.\n")

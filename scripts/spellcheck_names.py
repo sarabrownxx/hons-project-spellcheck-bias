@@ -223,6 +223,11 @@ def run_all_checkers(df: pd.DataFrame,
                      lambda unknowns: hunspell_corrections(unknowns, d_hunspell),
                      "hunspell_latin", dataset_latin_set)
 
+    # Checkpoint: hunspell results safe on disk before the pyspellchecker pass
+    log.info("Checkpoint: saving hunspell results…")
+    df.to_parquet(PARQUET_PATH, index=False)
+    log.info("Checkpoint saved.")
+
     log.info("[pyspellchecker — Condition A] original names")
     df = run_checker(df, "name",
                      lambda words: pysc_batch_known(words, spell_pysc),
