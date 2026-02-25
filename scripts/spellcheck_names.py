@@ -117,37 +117,69 @@ def _pkg(name):
 def hunspell_batch_known(words: list, d: enchant.Dict) -> set:
     """Return the subset of words that hunspell (en_US) considers correct."""
     known = set()
-    for w in words:
+    total = len(words)
+    t0 = time.time()
+    for i, w in enumerate(words):
         if w:
             try:
                 if d.check(w):
                     known.add(w)
             except enchant.errors.Error:
                 pass
+        if (i + 1) % 100_000 == 0:
+            log.info("    hunspell check: %s / %s (%.0f%%)  %.0fs elapsed",
+                     f"{i+1:,}", f"{total:,}", 100 * (i + 1) / total,
+                     time.time() - t0)
+    log.info("    hunspell check done — %s known / %s  (%.0fs)",
+             f"{len(known):,}", f"{total:,}", time.time() - t0)
     return known
 
 
 def hunspell_corrections(unknowns: set, d: enchant.Dict) -> dict:
     """Return {word: top_suggestion_or_None} for each unknown word."""
     result = {}
-    for w in unknowns:
+    total = len(unknowns)
+    t0 = time.time()
+    for i, w in enumerate(unknowns):
         if w:
             try:
                 suggestions = d.suggest(w)
                 result[w] = suggestions[0] if suggestions else None
             except enchant.errors.Error:
                 result[w] = None
+        if (i + 1) % 50_000 == 0:
+            log.info("    hunspell suggestions: %s / %s (%.0f%%)  %.0fs elapsed",
+                     f"{i+1:,}", f"{total:,}", 100 * (i + 1) / total,
+                     time.time() - t0)
+    log.info("    hunspell suggestions done — %s words  (%.0fs)",
+             f"{total:,}", time.time() - t0)
     return result
 
 
 def pysc_batch_known(words: list, spell: SpellChecker) -> set:
     """Return the subset of words that pyspellchecker considers known."""
-    return spell.known(words)
+    log.info("    pysc check: spell.known() on %s words…", f"{len(words):,}")
+    t0 = time.time()
+    result = spell.known(words)
+    log.info("    pysc check done — %s known  (%.0fs)", f"{len(result):,}", time.time() - t0)
+    return result
 
 
 def pysc_corrections(unknowns: set, spell: SpellChecker) -> dict:
     """Return {word: correction_or_None} for each unknown word."""
-    return {w: spell.correction(w) for w in unknowns if w}
+    result = {}
+    total = len(unknowns)
+    t0 = time.time()
+    for i, w in enumerate(unknowns):
+        if w:
+            result[w] = spell.correction(w)
+        if (i + 1) % 50_000 == 0:
+            log.info("    pysc corrections: %s / %s (%.0f%%)  %.0fs elapsed",
+                     f"{i+1:,}", f"{total:,}", 100 * (i + 1) / total,
+                     time.time() - t0)
+    log.info("    pysc corrections done — %s words  (%.0fs)",
+             f"{total:,}", time.time() - t0)
+    return result
 
 
 # ── Core check runner ──────────────────────────────────────────────────────────
@@ -173,9 +205,23 @@ def run_checker(df: pd.DataFrame,
     log.info("    Known: %s  Unknown: %s  (%.1f%% known)",
              f"{len(known):,}", f"{len(unknown):,}",
              100 * len(known) / max(len(unique_words), 1))
-    log.info("    Computing corrections for %s unknowns…", f"{len(unknown):,}")
 
-    corr_map = corrections_fn(unknown)
+    # Skip suggest() for ideographic-script words in Condition A — their
+    # corrections will be None regardless, so calling suggest() wastes time.
+    if null_ideographic:
+        ideographic_words = set(
+            df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), name_col].unique()
+        )
+        unknown_for_correction = unknown - ideographic_words
+        log.info("    Skipping suggestions for %s ideographic unknowns; "
+                 "computing corrections for %s remaining unknowns…",
+                 f"{len(unknown & ideographic_words):,}",
+                 f"{len(unknown_for_correction):,}")
+    else:
+        unknown_for_correction = unknown
+        log.info("    Computing corrections for %s unknowns…", f"{len(unknown):,}")
+
+    corr_map = corrections_fn(unknown_for_correction)
 
     df[prefix + "_known"]      = df[name_col].isin(known)
     df[prefix + "_correction"] = df[name_col].map(corr_map)
@@ -202,6 +248,11 @@ def run_all_checkers(df: pd.DataFrame,
                      dataset_latin_set: set) -> tuple:
     """
     Runs hunspell and pyspellchecker under both conditions (A and B).
+
+    Pre-computes each tool on the union of unique words across both conditions
+    so that pure ASCII Latin names (where name == name_latin) are only checked
+    once rather than twice.  Results are shared across conditions via cache.
+
     Returns the enriched DataFrame and a stats dict.
     """
     t0 = time.time()
@@ -209,36 +260,81 @@ def run_all_checkers(df: pd.DataFrame,
     d_hunspell = enchant.Dict("en_US")
     spell_pysc  = SpellChecker()
 
+    # Build word sets for each condition and their union.
+    cond_a_words = set(df["name"].dropna().unique())
+    cond_b_words = set(df["name_latin"].dropna().unique())
+    all_words    = list(cond_a_words | cond_b_words)
+    overlap      = cond_a_words & cond_b_words
+
+    log.info("Unique words — Condition A: %s  Condition B: %s  "
+             "union: %s  overlap (name==name_latin): %s",
+             f"{len(cond_a_words):,}", f"{len(cond_b_words):,}",
+             f"{len(all_words):,}", f"{len(overlap):,}")
+
+    # Ideographic names: anyascii always produces ASCII so these words can
+    # never appear in name_latin; skip suggest() for them (results are nulled).
+    ideographic_words = set(
+        df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), "name"].dropna().unique()
+    )
+
+    # ── hunspell — pre-compute once on the combined word set ──────────────────
     log.info("")
+    log.info("Pre-computing hunspell over %s combined unique words…",
+             f"{len(all_words):,}")
+    h_known = hunspell_batch_known(all_words, d_hunspell)
+    h_unknown = (cond_a_words | cond_b_words) - h_known
+    h_unknown_for_corr = h_unknown - ideographic_words
+    log.info("  hunspell: %s known  %s unknown  "
+             "(%s ideographic unknowns skipped for corrections)",
+             f"{len(h_known):,}", f"{len(h_unknown):,}",
+             f"{len(h_unknown & ideographic_words):,}")
+    h_corr_map = hunspell_corrections(h_unknown_for_corr, d_hunspell)
+
     log.info("[hunspell — Condition A] original names")
     df = run_checker(df, "name",
-                     lambda words: hunspell_batch_known(words, d_hunspell),
-                     lambda unknowns: hunspell_corrections(unknowns, d_hunspell),
+                     lambda words: h_known,
+                     lambda unknowns: h_corr_map,
                      "hunspell_orig", dataset_latin_set,
                      null_ideographic=True)
 
-    log.info("[hunspell — Condition B] name_latin")
-    df = run_checker(df, "name_latin",
-                     lambda words: hunspell_batch_known(words, d_hunspell),
-                     lambda unknowns: hunspell_corrections(unknowns, d_hunspell),
-                     "hunspell_latin", dataset_latin_set)
-
-    # Checkpoint: hunspell results safe on disk before the pyspellchecker pass
-    log.info("Checkpoint: saving hunspell results…")
+    log.info("Checkpoint: saving after hunspell Condition A…")
     df.to_parquet(PARQUET_PATH, index=False)
     log.info("Checkpoint saved.")
 
+    log.info("[hunspell — Condition B] name_latin")
+    df = run_checker(df, "name_latin",
+                     lambda words: h_known,
+                     lambda unknowns: h_corr_map,
+                     "hunspell_latin", dataset_latin_set)
+
+    log.info("Checkpoint: saving after hunspell Condition B…")
+    df.to_parquet(PARQUET_PATH, index=False)
+    log.info("Checkpoint saved.")
+
+    # ── pyspellchecker — pre-compute once on the combined word set ────────────
+    log.info("")
+    log.info("Pre-computing pyspellchecker over %s combined unique words…",
+             f"{len(all_words):,}")
+    p_known = pysc_batch_known(all_words, spell_pysc)
+    p_unknown = (cond_a_words | cond_b_words) - p_known
+    p_unknown_for_corr = p_unknown - ideographic_words
+    log.info("  pysc: %s known  %s unknown  "
+             "(%s ideographic unknowns skipped for corrections)",
+             f"{len(p_known):,}", f"{len(p_unknown):,}",
+             f"{len(p_unknown & ideographic_words):,}")
+    p_corr_map = pysc_corrections(p_unknown_for_corr, spell_pysc)
+
     log.info("[pyspellchecker — Condition A] original names")
     df = run_checker(df, "name",
-                     lambda words: pysc_batch_known(words, spell_pysc),
-                     lambda unknowns: pysc_corrections(unknowns, spell_pysc),
+                     lambda words: p_known,
+                     lambda unknowns: p_corr_map,
                      "pysc_orig", dataset_latin_set,
                      null_ideographic=True)
 
     log.info("[pyspellchecker — Condition B] name_latin")
     df = run_checker(df, "name_latin",
-                     lambda words: pysc_batch_known(words, spell_pysc),
-                     lambda unknowns: pysc_corrections(unknowns, spell_pysc),
+                     lambda words: p_known,
+                     lambda unknowns: p_corr_map,
                      "pysc_latin", dataset_latin_set)
 
     duration = time.time() - t0
