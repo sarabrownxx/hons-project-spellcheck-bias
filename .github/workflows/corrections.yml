@@ -1,0 +1,65 @@
+name: Corrections Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Run ID of the main pipeline to download the enriched parquet from'
+        required: true
+        type: string
+
+jobs:
+  corrections:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libenchant-2-dev hunspell-en-us
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create output directories
+        run: mkdir -p data logs
+
+      # Download the enriched parquet (with *_known columns) from the main
+      # pipeline run. Avoids re-running steps 1-3 (~65 minutes) and gives
+      # the full 6-hour budget for corrections.
+      - name: Download enriched dataset from main pipeline
+        uses: actions/download-artifact@v4
+        with:
+          name: names-enriched-${{ inputs.source_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Run corrections
+        run: python scripts/corrections_names.py
+
+      - name: Upload corrected dataset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: names-corrected-${{ github.run_id }}
+          path: data/names_base.parquet
+          retention-days: 90
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correction-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
