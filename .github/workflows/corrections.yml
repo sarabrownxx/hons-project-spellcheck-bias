@@ -53,7 +53,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: names-corrected-${{ github.run_id }}
-          path: data/names_base.parquet
+          path: data/names_results_base.parquet
           retention-days: 90
 
       - name: Upload logs

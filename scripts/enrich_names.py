@@ -50,7 +50,8 @@ from langdetect import DetectorFactory, detect_langs, LangDetectException
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-PARQUET_PATH      = Path("data/names_base.parquet")
+INPUT_PATH        = Path("data/names_base.parquet")
+PARQUET_PATH      = Path("data/names_results_base.parquet")
 SAMPLE_SIZE       = 1000          # Names queried against nationalize.io
 ETHNICOLR_BATCH   = 10_000        # Rows per ethnicolr batch (memory vs speed)
 LANGDETECT_REPS   = 5             # Repeat name N times for more stable detection
@@ -314,8 +315,8 @@ def run_nationalize_sample(df, country_map):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"Loading {PARQUET_PATH}…", flush=True)
-    df = pd.read_parquet(PARQUET_PATH)
+    print(f"Loading {INPUT_PATH}…", flush=True)
+    df = pd.read_parquet(INPUT_PATH)
     print(f"  {len(df):,} names loaded\n")
 
     country_map = build_country_map()

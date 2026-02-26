@@ -34,7 +34,7 @@ jobs:
         run: mkdir -p data logs
 
       # ── Step 1: Build base dataset ──────────────────────────────────────────
-      # Rebuilds names_base.parquet from scratch using the names_dataset
+      # Rebuilds names_results_base.parquet from scratch using the names_dataset
       # library. Keeps large data files out of the repository.
       - name: Step 1 — Build base dataset
         run: python scripts/database_v2.py
@@ -71,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: names-enriched-${{ github.run_id }}
-          path: data/names_base.parquet
+          path: data/names_results_base.parquet
           retention-days: 90
 
       - name: Upload logs and reports

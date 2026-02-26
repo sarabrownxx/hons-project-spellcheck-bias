@@ -44,7 +44,7 @@ Usage
 
 Outputs
 ───────
-  data/names_base.parquet        enriched in-place
+  data/names_results_base.parquet        enriched in-place
   logs/spellcheck_<ts>.log       full run log
   logs/spellcheck_<ts>_report.md methodology + results report
 """
@@ -60,15 +60,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import numpy as np
 import pandas as pd
 import enchant
 from spellchecker import SpellChecker
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-PARQUET_PATH = Path("data/names_base.parquet")
-LOGS_DIR     = Path("logs")
+PARQUET_PATH  = Path("data/names_results_base.parquet")
+RESULTS_PATH  = Path("data/advanced_results_base.parquet")
+LOGS_DIR      = Path("logs")
 
 # Scripts where a single Unicode codepoint represents one glyph/syllable,
 # making Condition A corrections meaningless (spurious edit-distance matches).
@@ -235,10 +235,10 @@ def run_all_checkers(df: pd.DataFrame) -> tuple:
              f"{len(h_known):,}", f"{len(all_words) - len(h_known):,}")
 
     log.info("[hunspell — Condition A] original names")
-    df = run_checker(df, "name", lambda words: h_known, "hunspell_orig")
+    df = run_checker(df, "name", lambda _: h_known, "hunspell_orig")
 
     log.info("[hunspell — Condition B] name_latin")
-    df = run_checker(df, "name_latin", lambda words: h_known, "hunspell_latin")
+    df = run_checker(df, "name_latin", lambda _: h_known, "hunspell_latin")
 
     log.info("Checkpoint: saving after hunspell…")
     df.to_parquet(PARQUET_PATH, index=False)
@@ -253,10 +253,10 @@ def run_all_checkers(df: pd.DataFrame) -> tuple:
              f"{len(p_known):,}", f"{len(all_words) - len(p_known):,}")
 
     log.info("[pyspellchecker — Condition A] original names")
-    df = run_checker(df, "name", lambda words: p_known, "pysc_orig")
+    df = run_checker(df, "name", lambda _: p_known, "pysc_orig")
 
     log.info("[pyspellchecker — Condition B] name_latin")
-    df = run_checker(df, "name_latin", lambda words: p_known, "pysc_latin")
+    df = run_checker(df, "name_latin", lambda _: p_known, "pysc_latin")
 
     duration = time.time() - t0
     log.info("All checkers complete in %.0fs", duration)
