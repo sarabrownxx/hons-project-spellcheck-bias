@@ -30,23 +30,13 @@ Spell-checkers used
 
 New columns added
 ─────────────────
-  hunspell_orig_known       hunspell: original name recognised (en_US)
-  hunspell_orig_correction  hunspell: top suggestion when not recognised
-  hunspell_latin_known      hunspell: name_latin recognised
-  hunspell_latin_correction hunspell: top suggestion for name_latin
-  hunspell_orig_correction_in_dataset   correction matches a dataset name
-  hunspell_latin_correction_in_dataset  correction matches a dataset name
+  hunspell_orig_known   hunspell: original name recognised (en_US)
+  hunspell_latin_known  hunspell: name_latin recognised
+  pysc_orig_known       pyspellchecker: original name recognised
+  pysc_latin_known      pyspellchecker: name_latin recognised
 
-  pysc_orig_known           pyspellchecker: original name recognised
-  pysc_orig_correction      pyspellchecker: top correction for original
-  pysc_latin_known          pyspellchecker: name_latin recognised
-  pysc_latin_correction     pyspellchecker: top correction for name_latin
-  pysc_orig_correction_in_dataset
-  pysc_latin_correction_in_dataset
-
-Note: *_orig_correction is set to None for CJK/Hangul/Hiragana/Katakana
-originals because single-codepoint characters produce spurious short-word
-corrections (e.g. a 2-char Chinese name matches English "i" at edit distance 1).
+Correction suggestions are computed separately by corrections_names.py,
+which must be run after this script.
 
 Usage
 ─────
@@ -187,14 +177,11 @@ def pysc_corrections(unknowns: set, spell: SpellChecker) -> dict:
 def run_checker(df: pd.DataFrame,
                 name_col: str,
                 batch_known_fn,
-                corrections_fn,
-                prefix: str,
-                dataset_latin_set: set,
-                null_ideographic: bool = False) -> pd.DataFrame:
+                prefix: str) -> pd.DataFrame:
     """
     Run one spell-checker on one name column (one condition).
-    Adds {prefix}_known and {prefix}_correction columns to df.
-    If null_ideographic is True, nulls corrections for ideographic-script names.
+    Adds {prefix}_known to df.  Corrections are handled separately by
+    corrections_names.py.
     """
     unique_words = df[name_col].unique().tolist()
     log.info("  %s — checking %s unique values…", prefix, f"{len(unique_words):,}")
@@ -206,54 +193,22 @@ def run_checker(df: pd.DataFrame,
              f"{len(known):,}", f"{len(unknown):,}",
              100 * len(known) / max(len(unique_words), 1))
 
-    # Skip suggest() for ideographic-script words in Condition A — their
-    # corrections will be None regardless, so calling suggest() wastes time.
-    if null_ideographic:
-        ideographic_words = set(
-            df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), name_col].unique()
-        )
-        unknown_for_correction = unknown - ideographic_words
-        log.info("    Skipping suggestions for %s ideographic unknowns; "
-                 "computing corrections for %s remaining unknowns…",
-                 f"{len(unknown & ideographic_words):,}",
-                 f"{len(unknown_for_correction):,}")
-    else:
-        unknown_for_correction = unknown
-        log.info("    Computing corrections for %s unknowns…", f"{len(unknown):,}")
-
-    corr_map = corrections_fn(unknown_for_correction)
-
-    df[prefix + "_known"]      = df[name_col].isin(known)
-    df[prefix + "_correction"] = df[name_col].map(corr_map)
-
-    if null_ideographic:
-        mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
-        df.loc[mask, prefix + "_correction"] = None
-        log.info("    Nulled corrections for %s ideographic-script names",
-                 f"{mask.sum():,}")
-
-    # Cross-condition: does the correction point to a real dataset name?
-    df[prefix + "_correction_in_dataset"] = (
-        df[prefix + "_correction"]
-          .str.lower()
-          .isin(dataset_latin_set)
-    )
-
+    df[prefix + "_known"] = df[name_col].isin(known)
     return df
 
 
 # ── Run all checkers ───────────────────────────────────────────────────────────
 
-def run_all_checkers(df: pd.DataFrame,
-                     dataset_latin_set: set) -> tuple:
+def run_all_checkers(df: pd.DataFrame) -> tuple:
     """
-    Runs hunspell and pyspellchecker under both conditions (A and B).
+    Runs hunspell and pyspellchecker known/unknown check under both conditions.
 
     Pre-computes each tool on the union of unique words across both conditions
     so that pure ASCII Latin names (where name == name_latin) are only checked
-    once rather than twice.  Results are shared across conditions via cache.
+    once.  Returns the enriched DataFrame and a stats dict.
 
-    Returns the enriched DataFrame and a stats dict.
+    Correction suggestions are not computed here — run corrections_names.py
+    separately once this pipeline has completed.
     """
     t0 = time.time()
 
@@ -271,71 +226,37 @@ def run_all_checkers(df: pd.DataFrame,
              f"{len(cond_a_words):,}", f"{len(cond_b_words):,}",
              f"{len(all_words):,}", f"{len(overlap):,}")
 
-    # Ideographic names: anyascii always produces ASCII so these words can
-    # never appear in name_latin; skip suggest() for them (results are nulled).
-    ideographic_words = set(
-        df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), "name"].dropna().unique()
-    )
-
-    # ── hunspell — pre-compute once on the combined word set ──────────────────
+    # ── hunspell — check once on the combined word set ────────────────────────
     log.info("")
     log.info("Pre-computing hunspell over %s combined unique words…",
              f"{len(all_words):,}")
     h_known = hunspell_batch_known(all_words, d_hunspell)
-    h_unknown = (cond_a_words | cond_b_words) - h_known
-    h_unknown_for_corr = h_unknown - ideographic_words
-    log.info("  hunspell: %s known  %s unknown  "
-             "(%s ideographic unknowns skipped for corrections)",
-             f"{len(h_known):,}", f"{len(h_unknown):,}",
-             f"{len(h_unknown & ideographic_words):,}")
-    h_corr_map = hunspell_corrections(h_unknown_for_corr, d_hunspell)
+    log.info("  hunspell: %s known  %s unknown",
+             f"{len(h_known):,}", f"{len(all_words) - len(h_known):,}")
 
     log.info("[hunspell — Condition A] original names")
-    df = run_checker(df, "name",
-                     lambda words: h_known,
-                     lambda unknowns: h_corr_map,
-                     "hunspell_orig", dataset_latin_set,
-                     null_ideographic=True)
-
-    log.info("Checkpoint: saving after hunspell Condition A…")
-    df.to_parquet(PARQUET_PATH, index=False)
-    log.info("Checkpoint saved.")
+    df = run_checker(df, "name", lambda words: h_known, "hunspell_orig")
 
     log.info("[hunspell — Condition B] name_latin")
-    df = run_checker(df, "name_latin",
-                     lambda words: h_known,
-                     lambda unknowns: h_corr_map,
-                     "hunspell_latin", dataset_latin_set)
+    df = run_checker(df, "name_latin", lambda words: h_known, "hunspell_latin")
 
-    log.info("Checkpoint: saving after hunspell Condition B…")
+    log.info("Checkpoint: saving after hunspell…")
     df.to_parquet(PARQUET_PATH, index=False)
     log.info("Checkpoint saved.")
 
-    # ── pyspellchecker — pre-compute once on the combined word set ────────────
+    # ── pyspellchecker — check once on the combined word set ──────────────────
     log.info("")
     log.info("Pre-computing pyspellchecker over %s combined unique words…",
              f"{len(all_words):,}")
     p_known = pysc_batch_known(all_words, spell_pysc)
-    p_unknown = (cond_a_words | cond_b_words) - p_known
-    p_unknown_for_corr = p_unknown - ideographic_words
-    log.info("  pysc: %s known  %s unknown  "
-             "(%s ideographic unknowns skipped for corrections)",
-             f"{len(p_known):,}", f"{len(p_unknown):,}",
-             f"{len(p_unknown & ideographic_words):,}")
-    p_corr_map = pysc_corrections(p_unknown_for_corr, spell_pysc)
+    log.info("  pysc: %s known  %s unknown",
+             f"{len(p_known):,}", f"{len(all_words) - len(p_known):,}")
 
     log.info("[pyspellchecker — Condition A] original names")
-    df = run_checker(df, "name",
-                     lambda words: p_known,
-                     lambda unknowns: p_corr_map,
-                     "pysc_orig", dataset_latin_set,
-                     null_ideographic=True)
+    df = run_checker(df, "name", lambda words: p_known, "pysc_orig")
 
     log.info("[pyspellchecker — Condition B] name_latin")
-    df = run_checker(df, "name_latin",
-                     lambda words: p_known,
-                     lambda unknowns: p_corr_map,
-                     "pysc_latin", dataset_latin_set)
+    df = run_checker(df, "name_latin", lambda words: p_known, "pysc_latin")
 
     duration = time.time() - t0
     log.info("All checkers complete in %.0fs", duration)
@@ -344,27 +265,19 @@ def run_all_checkers(df: pd.DataFrame,
     def pct(col): return round(100 * df[col].mean(), 2)
 
     stats = {
-        "duration_s":   round(duration, 1),
-        "n_total":      len(df),
+        "duration_s": round(duration, 1),
+        "n_total":    len(df),
         "hunspell": {
-            "version":    enchant.__version__,
-            "dictionary": "en_US",
-            "pct_orig_known":   pct("hunspell_orig_known"),
-            "pct_latin_known":  pct("hunspell_latin_known"),
-            "n_orig_correction_in_dataset":
-                int(df["hunspell_orig_correction_in_dataset"].sum()),
-            "n_latin_correction_in_dataset":
-                int(df["hunspell_latin_correction_in_dataset"].sum()),
+            "version":        enchant.__version__,
+            "dictionary":     "en_US",
+            "pct_orig_known": pct("hunspell_orig_known"),
+            "pct_latin_known": pct("hunspell_latin_known"),
         },
         "pysc": {
-            "version":   _pkg("pyspellchecker"),
-            "language":  "en",
-            "pct_orig_known":   pct("pysc_orig_known"),
-            "pct_latin_known":  pct("pysc_latin_known"),
-            "n_orig_correction_in_dataset":
-                int(df["pysc_orig_correction_in_dataset"].sum()),
-            "n_latin_correction_in_dataset":
-                int(df["pysc_latin_correction_in_dataset"].sum()),
+            "version":        _pkg("pyspellchecker"),
+            "language":       "en",
+            "pct_orig_known": pct("pysc_orig_known"),
+            "pct_latin_known": pct("pysc_latin_known"),
         },
         "script_breakdown":  _script_breakdown(df),
         "country_breakdown": _country_breakdown(df),
@@ -448,8 +361,7 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
       "macOS system spell check, and Chrome. It is the spell-checker that real "
       "users encounter daily. Bias findings here have direct real-world "
       "significance.")
-    p("- **API used:** `enchant.Dict.check(word)` (known/unknown), "
-      "`enchant.Dict.suggest(word)` (top correction).")
+    p("- **API used:** `enchant.Dict.check(word)` (known/unknown).")
 
     h(3, "3.2 pyspellchecker (secondary baseline)")
     p("- **Library:** `pyspellchecker` v" + stats["pysc"]["version"])
@@ -458,13 +370,8 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
       "approach). Algorithmically distinct from hunspell, enabling comparison "
       "of bias across different spell-check strategies.")
 
-    h(3, "3.3 Ideographic script correction nulling")
-    p("For names in CJK, Hangul, Hiragana, and Katakana scripts, each "
-      "character occupies a single Unicode codepoint. A 2-character Chinese "
-      "name therefore has string length 2, making spurious corrections "
-      "appear at edit distance 1 (e.g. 'i', 'oo'). Condition A corrections "
-      "are set to None for these scripts. Condition B is unaffected as "
-      "anyascii produces longer Latin strings.")
+    p("Note: correction suggestions are computed separately by "
+      "`corrections_names.py` and are not included in this report.")
 
     h(2, "4. Results — Overall")
     table(
@@ -483,21 +390,6 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
     p("A gap between Condition A and B for non-Latin scripts indicates "
       "script-level bias. A persistent gap between Western and non-Western "
       "Latin names under Condition B indicates lexical/phonological bias.")
-
-    n = stats["n_total"]
-    p("**Corrections pointing to a dataset name:**")
-    table(
-        ["Tool", "Condition", "n corrections in dataset"],
-        [
-            ["hunspell",       "A", str(stats["hunspell"]["n_orig_correction_in_dataset"])],
-            ["hunspell",       "B", str(stats["hunspell"]["n_latin_correction_in_dataset"])],
-            ["pyspellchecker", "A", str(stats["pysc"]["n_orig_correction_in_dataset"])],
-            ["pyspellchecker", "B", str(stats["pysc"]["n_latin_correction_in_dataset"])],
-        ]
-    )
-    p("When a correction matches a name in the dataset it suggests the "
-      "spell-checker is steering the input toward a recognised name, rather "
-      "than returning an arbitrary English word.")
 
     h(2, "5. Results — Breakdown by Script")
     table(
@@ -538,32 +430,18 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
     table(
         ["Column", "Type", "Description"],
         [
-            ["hunspell_orig_known",    "bool",
+            ["hunspell_orig_known",  "bool",
              "hunspell en_US: original name is in dictionary"],
-            ["hunspell_orig_correction", "str|None",
-             "hunspell: top suggestion; None if known, no match, or ideographic"],
-            ["hunspell_latin_known",   "bool",
+            ["hunspell_latin_known", "bool",
              "hunspell en_US: name_latin is in dictionary"],
-            ["hunspell_latin_correction", "str|None",
-             "hunspell: top suggestion for name_latin"],
-            ["hunspell_orig_correction_in_dataset", "bool",
-             "Condition A correction matches a name in this dataset"],
-            ["hunspell_latin_correction_in_dataset", "bool",
-             "Condition B correction matches a name in this dataset"],
-            ["pysc_orig_known",    "bool",
+            ["pysc_orig_known",      "bool",
              "pyspellchecker: original name is recognised"],
-            ["pysc_orig_correction", "str|None",
-             "pyspellchecker: top correction; None if known or no match"],
-            ["pysc_latin_known",   "bool",
+            ["pysc_latin_known",     "bool",
              "pyspellchecker: name_latin is recognised"],
-            ["pysc_latin_correction", "str|None",
-             "pyspellchecker: top correction for name_latin"],
-            ["pysc_orig_correction_in_dataset",  "bool",
-             "Condition A correction matches a name in this dataset"],
-            ["pysc_latin_correction_in_dataset", "bool",
-             "Condition B correction matches a name in this dataset"],
         ]
     )
+    p("Correction columns (`*_correction`, `*_correction_in_dataset`) are "
+      "added by `corrections_names.py`.")
 
     h(2, "8. Limitations")
     p("1. Both spell-checkers use English-language dictionaries. Recognition "
@@ -574,9 +452,7 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
       "Hebrew). Arabic 'محمد' → 'mhmd' (consonants only), not the standard "
       "romanisation 'Muhammad'. Condition B may therefore understate "
       "recognition for these scripts.")
-    p("3. Condition A corrections are nulled for CJK, Hangul, Hiragana, and "
-      "Katakana. See Section 3.3.")
-    p("4. Names containing spaces are passed as single tokens and will not be "
+    p("3. Names containing spaces are passed as single tokens and will not be "
       "recognised regardless of origin.")
 
     h(2, "9. Output Files")
@@ -623,13 +499,8 @@ def main():
         log.error("Missing columns: %s — run preprocess_names.py first.", missing)
         sys.exit(1)
 
-    # Build dataset lookup for the "correction in dataset" check
-    dataset_latin_set = set(df["name_latin"].str.lower().dropna())
-    log.info("  Dataset lookup set: %s unique values",
-             f"{len(dataset_latin_set):,}")
-
     # ── Run all checkers ──────────────────────────────────────────────────────
-    df, stats = run_all_checkers(df, dataset_latin_set)
+    df, stats = run_all_checkers(df)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     log.info("")
