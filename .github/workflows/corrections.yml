@@ -12,6 +12,9 @@ jobs:
   corrections:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout repository
