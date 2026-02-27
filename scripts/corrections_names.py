@@ -29,16 +29,27 @@ IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
 
 
 def _find_parquet() -> Path:
-    """Locate the input parquet, tolerating both old and new filenames."""
+    """Locate the input parquet, tolerating different artifact download layouts."""
     candidates = [
         Path("data/names_results_base.parquet"),
         Path("data/names_base.parquet"),
+        Path("names_results_base.parquet"),
+        Path("names_base.parquet"),
     ]
     for p in candidates:
         if p.exists():
+            log.info("Found input parquet at: %s", p)
             return p
+
+    # Last resort: search the entire workspace
+    found = sorted(Path(".").rglob("*.parquet"))
+    log.info("Parquet search found: %s", [str(f) for f in found])
+    if len(found) == 1:
+        log.info("Using: %s", found[0])
+        return found[0]
     raise FileNotFoundError(
-        f"No input parquet found. Tried: {[str(c) for c in candidates]}"
+        f"No input parquet found. Searched candidates and workspace. "
+        f"All .parquet files found: {[str(f) for f in found]}"
     )
 
 
