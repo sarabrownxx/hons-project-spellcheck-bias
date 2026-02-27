@@ -116,6 +116,7 @@ def main():
              enchant.__version__, _pkg("pyspellchecker"))
 
     parquet_path = _find_parquet()
+    output_path = Path("data/names_results_base.parquet")
     log.info("Loading %s…", parquet_path)
     df = pd.read_parquet(parquet_path)
     log.info("  %s names loaded", f"{len(df):,}")
@@ -157,7 +158,7 @@ def main():
     df["hunspell_latin_correction_in_dataset"] = df["hunspell_latin_correction"].str.lower().isin(dataset_latin_set)
 
     log.info("Checkpoint: saving after hunspell corrections…")
-    df.to_parquet(parquet_path, index=False)
+    df.to_parquet(output_path, index=False)
     log.info("Checkpoint saved.")
 
     # pyspellchecker corrections
@@ -178,8 +179,8 @@ def main():
     df["pysc_latin_correction_in_dataset"] = df["pysc_latin_correction"].str.lower().isin(dataset_latin_set)
 
     log.info("")
-    log.info("Saving to %s…", parquet_path)
-    df.to_parquet(parquet_path, index=False)
+    log.info("Saving to %s…", output_path)
+    df.to_parquet(output_path, index=False)
     log.info("Done.  Log: %s", log_path)
 
 
