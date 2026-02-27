@@ -24,7 +24,7 @@ import enchant
 import pandas as pd
 from spellchecker import SpellChecker
 
-PARQUET_PATH = Path("data/names_base.parquet")
+PARQUET_PATH = Path("data/names_results_base.parquet")
 LOGS_DIR     = Path("logs")
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
 
