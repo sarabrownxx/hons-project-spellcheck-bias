@@ -116,7 +116,7 @@ def main():
              enchant.__version__, _pkg("pyspellchecker"))
 
     parquet_path = _find_parquet()
-    output_path = Path("data/names_results_base.parquet")
+    output_path = Path("data/advanced_results_base.parquet")
     log.info("Loading %s…", parquet_path)
     df = pd.read_parquet(parquet_path)
     log.info("  %s names loaded", f"{len(df):,}")

@@ -67,7 +67,6 @@ from spellchecker import SpellChecker
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 PARQUET_PATH  = Path("data/names_results_base.parquet")
-RESULTS_PATH  = Path("data/advanced_results_base.parquet")
 LOGS_DIR      = Path("logs")
 
 # Scripts where a single Unicode codepoint represents one glyph/syllable,
