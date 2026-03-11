@@ -13,6 +13,9 @@ for name in nd.first_names.keys():
     if not fn or "country" not in fn:
         continue
 
+    if all(len(part) <= 1 for part in name.split()):
+        continue
+
     countries = fn["country"]
     if not countries:
         continue

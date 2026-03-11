@@ -10,5 +10,6 @@ pyspellchecker>=0.8
 pyenchant>=3.3
 symspellpy>=6.7
 pycountry>=22.3
+countryinfo>=0.1.2
 requests>=2.28
 python-dotenv>=1.0

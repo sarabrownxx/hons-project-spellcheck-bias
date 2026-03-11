@@ -5,20 +5,11 @@ Enriches data/names_base.parquet with three additional signals:
 
 Full dataset (all names):
   ethnicolr_race            – top predicted ethnicity category
-  eth_EastAsian             – P(Asian,GreaterEastAsian,EastAsian)
-  eth_Japanese              – P(Asian,GreaterEastAsian,Japanese)
-  eth_IndianSubContinent    – P(Asian,IndianSubContinent)
-  eth_African               – P(GreaterAfrican,Africans)
-  eth_Muslim                – P(GreaterAfrican,Muslim)
-  eth_British               – P(GreaterEuropean,British)
-  eth_EastEuropean          – P(GreaterEuropean,EastEuropean)
-  eth_Jewish                – P(GreaterEuropean,Jewish)
-  eth_French                – P(GreaterEuropean,WestEuropean,French)
-  eth_Germanic              – P(GreaterEuropean,WestEuropean,Germanic)
-  eth_Hispanic              – P(GreaterEuropean,WestEuropean,Hispanic)
-  eth_Italian               – P(GreaterEuropean,WestEuropean,Italian)
-  eth_Nordic                – P(GreaterEuropean,WestEuropean,Nordic)
+  ethnicolr_prob            – probability assigned to ethnicolr_race
+  eth_distribution          – dict of all ethnicity probabilities (replaces individual eth_* columns)
+  top_country_region        – ethnicolr-aligned region for top_country (e.g. British, EastAsian)
   langdetect_lang           – top ISO 639-1 language code detected from name characters
+  langdetect_lang_name      – full language name for langdetect_lang
   langdetect_prob           – confidence of that detection
 
 Sample only (SAMPLE_SIZE names, stratified by top_country_prob; rest are NaN):
@@ -44,6 +35,7 @@ load_dotenv()  # loads .env locally; no-op on GitHub Actions where secrets are i
 import numpy as np
 import pandas as pd
 import pycountry
+from countryinfo import CountryInfo
 import requests
 import ethnicolr
 from langdetect import DetectorFactory, detect_langs, LangDetectException
@@ -79,6 +71,10 @@ ETH_COL_MAP = {
     "GreaterEuropean,WestEuropean,Nordic":    "eth_Nordic",
 }
 
+# Short label for each full ethnicolr race string (used for ethnicolr_prob)
+RACE_SHORT = {full: col.replace("eth_", "") for full, col in ETH_COL_MAP.items()}
+
+
 # ── Country name → ISO alpha-2 ─────────────────────────────────────────────────
 
 def build_country_map():
@@ -102,6 +98,56 @@ def to_iso2(country_name, country_map):
         return results[0].alpha_2 if results else None
     except LookupError:
         return None
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _lang_name(code):
+    """Convert an ISO 639-1 language code (e.g. 'fr', 'zh-cn') to a full name."""
+    if not code or pd.isna(code):
+        return None
+    lang = pycountry.languages.get(alpha_2=str(code).split("-")[0])
+    return lang.name if lang else code
+
+
+def _country_langs(country_name, country_map):
+    """Return list of ISO 639-1 language codes for a country, via countryinfo."""
+    iso2 = to_iso2(country_name, country_map)
+    if not iso2:
+        return []
+    try:
+        return CountryInfo(iso2).languages() or []
+    except Exception:
+        return []
+
+
+def _consolidate_ethnicolr(df):
+    """
+    After run_ethnicolr, adds two derived columns then drops the 13 individual
+    eth_* probability columns (which are now captured in eth_distribution).
+
+    Columns added (ethnicolr_race is kept as-is):
+      ethnicolr_prob  : probability of the top-predicted race (from ethnicolr_race)
+      eth_distribution: dict {short_race: probability} for all 13 categories
+    """
+    eth_col_names = list(ETH_COL_MAP.values())
+    short_names   = [c.replace("eth_", "") for c in eth_col_names]
+
+    # ethnicolr_prob: pick the probability column matching each row's ethnicolr_race
+    df["ethnicolr_prob"] = np.nan
+    for full_race, col in ETH_COL_MAP.items():
+        mask = df["ethnicolr_race"] == full_race
+        if mask.any():
+            df.loc[mask, "ethnicolr_prob"] = df.loc[mask, col]
+
+    # eth_distribution: consolidate all 13 eth_* probabilities into one dict per row
+    eth_arr = df[eth_col_names].to_numpy(dtype=float)
+    df["eth_distribution"] = [
+        {k: round(float(v), 4) for k, v in zip(short_names, row) if not np.isnan(v)}
+        for row in eth_arr
+    ]
+
+    df.drop(columns=eth_col_names, inplace=True)
 
 
 # ── Step 1: ethnicolr ──────────────────────────────────────────────────────────
@@ -227,6 +273,7 @@ def run_langdetect(df):
                                                           "langdetect_prob"]))
     df["langdetect_lang"] = results["langdetect_lang"]
     df["langdetect_prob"] = pd.to_numeric(results["langdetect_prob"], errors="coerce")
+    df["langdetect_lang_name"] = df["langdetect_lang"].apply(_lang_name)
     return df
 
 
@@ -302,7 +349,7 @@ def run_nationalize_sample(df, country_map):
             0.0,
         )
         df.at[idx, "agreement_score"] = round(score, 4)
-        df.at[idx, "n_models_used"]   = 1
+        df.at[idx, "n_models_used"]  += 1
 
     matched    = sum(1 for idx in sample_idx if df.at[idx, "agreement_score"] > 0)
     mean_score = df.loc[sample_idx, "agreement_score"].mean()
@@ -334,6 +381,8 @@ def main():
     t0 = time.time()
     df = run_ethnicolr(df)
     print(f"  Done in {time.time() - t0:.0f}s")
+    _consolidate_ethnicolr(df)
+    df["n_models_used"] += (~df["ethnicolr_race"].isna()).astype(int)
     checkpoint("ethnicolr")
 
     # ── 2. langdetect ─────────────────────────────────────────────────────────
@@ -341,6 +390,7 @@ def main():
     t0 = time.time()
     df = run_langdetect(df)
     print(f"  Done in {time.time() - t0:.0f}s")
+    df["n_models_used"] += (~df["langdetect_lang"].isna()).astype(int)
     checkpoint("langdetect")
 
     # ── 3. nationalize.io ─────────────────────────────────────────────────────
@@ -354,21 +404,45 @@ def main():
     df = run_nationalize_sample(df, country_map)
     print(f"  Done in {time.time() - t0:.0f}s\n")
 
+    # ── Country language comparison ────────────────────────────────────────────
+    print("\nAdding top_country_langs and country_lang_comp…", flush=True)
+    unique_countries = df["top_country"].dropna().unique()
+    langs_lookup = {c: _country_langs(c, country_map) for c in unique_countries}
+    df["top_country_langs"] = df["top_country"].map(langs_lookup)
+    df["country_lang_comp"] = df.apply(
+        lambda row: bool(row["langdetect_lang"]) and
+                    row["langdetect_lang"] in (row["top_country_langs"] or []),
+        axis=1,
+    )
+
+    # ── Column ordering ───────────────────────────────────────────────────────
+    desired_order = [
+        "name",
+        "full_countries_distribution",
+        "top_country", "top_country_langs", "top_country_prob", "strong_top_country",
+        "agreement_score", "n_models_used",
+        "name_script", "name_latin",
+        "ethnicolr_race", "ethnicolr_prob", "eth_distribution",
+        "langdetect_lang", "langdetect_lang_name", "langdetect_prob",
+        "country_lang_comp",
+    ]
+    ordered = [c for c in desired_order if c in df.columns]
+    remaining = [c for c in df.columns if c not in ordered]
+    df = df[ordered + remaining]
+
     # ── Final save ────────────────────────────────────────────────────────────
     print(f"Saving to {PARQUET_PATH}…", flush=True)
     df.to_parquet(PARQUET_PATH, index=False)
     print("Saved.\n")
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    eth_cols  = ["ethnicolr_race"] + list(ETH_COL_MAP.values())
-    lang_cols = ["langdetect_lang", "langdetect_prob"]
-    agr_cols  = ["agreement_score", "n_models_used"]
-
     print("── ethnicolr top category distribution (sample of 10) ──")
     print(df["ethnicolr_race"].value_counts().head(10).to_string())
 
     print("\n── langdetect top language distribution (sample of 10) ──")
     print(df["langdetect_lang"].value_counts().head(10).to_string())
+
+    print(f"\n── country_lang_comp: {df['country_lang_comp'].sum():,} / {df['country_lang_comp'].notna().sum():,} names match ──")
 
     sampled = df[df["n_models_used"] > 0]
     print(f"\n── agreement_score (n={len(sampled):,}) ──")
