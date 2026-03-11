@@ -1,0 +1,67 @@
+name: Corrections — Hunspell
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Run ID of the main pipeline to download the enriched parquet from'
+        required: true
+        type: string
+
+jobs:
+  hunspell-corrections:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      matrix:
+        chunk: [0, 1]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libenchant-2-dev hunspell-en-us
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p data logs
+
+      - name: Download enriched dataset from main pipeline
+        uses: actions/download-artifact@v4
+        with:
+          name: names-enriched-${{ inputs.source_run_id }}
+          path: .
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Run hunspell corrections (chunk ${{ matrix.chunk }} of 2)
+        run: |
+          python scripts/corrections_names.py \
+            --mode hunspell-chunk \
+            --chunk ${{ matrix.chunk }} \
+            --total-chunks 2
+
+      - name: Upload corrections chunk ${{ matrix.chunk }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunspell-chunk-${{ matrix.chunk }}-${{ github.run_id }}
+          path: data/hunspell_corrections_chunk_${{ matrix.chunk }}.json
+          retention-days: 7
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correction-hunspell-logs-${{ matrix.chunk }}-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
