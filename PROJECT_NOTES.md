@@ -74,8 +74,9 @@ under-represented.
 For every name in `nd.first_names`:
 1. Call `nd.search(name)` to get the country distribution dict.
 2. Skip names with no country data.
-3. Extract `top_country` and `top_country_prob` as the argmax of the distribution.
-4. Append a row.
+3. Skip names where every space-separated part is a single character (e.g. "A A" is removed, but "A Abdul" is kept). These are data artefacts from the source dataset rather than real names.
+4. Extract `top_country` and `top_country_prob` as the argmax of the distribution.
+5. Append a row.
 
 Saved as `data/names_base.parquet`.
 
@@ -134,43 +135,44 @@ has been run.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `ethnicolr_race` | string | Top predicted ethnicity category from ethnicolr |
-| `eth_EastAsian` | float | P(Asian,GreaterEastAsian,EastAsian) |
-| `eth_Japanese` | float | P(Asian,GreaterEastAsian,Japanese) |
-| `eth_IndianSubContinent` | float | P(Asian,IndianSubContinent) |
-| `eth_African` | float | P(GreaterAfrican,Africans) |
-| `eth_Muslim` | float | P(GreaterAfrican,Muslim) |
-| `eth_British` | float | P(GreaterEuropean,British) |
-| `eth_EastEuropean` | float | P(GreaterEuropean,EastEuropean) |
-| `eth_Jewish` | float | P(GreaterEuropean,Jewish) |
-| `eth_French` | float | P(GreaterEuropean,WestEuropean,French) |
-| `eth_Germanic` | float | P(GreaterEuropean,WestEuropean,Germanic) |
-| `eth_Hispanic` | float | P(GreaterEuropean,WestEuropean,Hispanic) |
-| `eth_Italian` | float | P(GreaterEuropean,WestEuropean,Italian) |
-| `eth_Nordic` | float | P(GreaterEuropean,WestEuropean,Nordic) |
+| `ethnicolr_race` | string | Top predicted ethnicity category from ethnicolr (full hierarchical label, e.g. "GreaterEuropean,British") |
+| `ethnicolr_prob` | float | Probability assigned to `ethnicolr_race` |
+| `eth_distribution` | dict | All 13 ethnicity probabilities as a single dict, e.g. `{"British": 0.40, "EastAsian": 0.09, ...}`. Short category names: EastAsian, Japanese, IndianSubContinent, African, Muslim, British, EastEuropean, Jewish, French, Germanic, Hispanic, Italian, Nordic. |
 | `langdetect_lang` | string | Top ISO 639-1 language code detected from name characters |
+| `langdetect_lang_name` | string | Full English language name for `langdetect_lang` (e.g. "Arabic", "Hungarian") |
 | `langdetect_prob` | float | Confidence of language detection |
-| `agreement_score` | float | Probability nationalize.io assigns to `top_country` (sampled rows) |
-| `n_models_used` | int | 1 for sampled rows, 0 otherwise |
+| `top_country_langs` | list | Official language codes (ISO 639-1) for `top_country`, from countryinfo |
+| `country_lang_comp` | bool | True if `langdetect_lang` is in `top_country_langs` — rough consistency check |
+| `agreement_score` | float | Probability nationalize.io assigns to `top_country` (sampled rows only; NaN otherwise) |
+| `n_models_used` | int | Count of models that successfully ran on this name (ethnicolr, langdetect each +1; nationalize.io +1 for sampled rows) |
 
-### 4.4 Spell-check bias columns (spellcheck_names.py)
+**Note on `eth_distribution`:** The 13 individual `eth_*` probability columns that ethnicolr originally produces are consolidated into this single dict column. This keeps the schema clean while retaining all the probability information. Values are rounded to 4 decimal places.
 
-Two checkers × two conditions × (known + correction + in_dataset) = 12 columns.
+### 4.4 Spell-check known/unknown columns (spellcheck_names.py → `names_results_base.parquet`)
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `hunspell_orig_known` | bool | hunspell en_US: original name is in dictionary |
-| `hunspell_orig_correction` | str\|None | hunspell: top suggestion; None if known, no match, or ideographic script |
 | `hunspell_latin_known` | bool | hunspell en_US: name_latin is in dictionary |
-| `hunspell_latin_correction` | str\|None | hunspell: top suggestion for name_latin |
-| `hunspell_orig_correction_in_dataset` | bool | Condition A correction matches a name in this dataset |
-| `hunspell_latin_correction_in_dataset` | bool | Condition B correction matches a name in this dataset |
 | `pysc_orig_known` | bool | pyspellchecker: original name recognised |
-| `pysc_orig_correction` | str\|None | pyspellchecker: top correction for original |
 | `pysc_latin_known` | bool | pyspellchecker: name_latin recognised |
+
+### 4.5 Correction columns (corrections_names.py → `advanced_results_base.parquet`)
+
+Computed separately because hunspell's `suggest()` call is ~0.025 s/word — too slow to run inline. Two checkers × two conditions × (correction + in_dataset) = 8 columns.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `hunspell_orig_correction` | str\|None | hunspell: top suggestion for original name; None if known, no match, or ideographic script |
+| `hunspell_latin_correction` | str\|None | hunspell: top suggestion for name_latin |
+| `hunspell_orig_correction_in_dataset` | bool | True if Condition A correction matches any name in the dataset (case-insensitive, matched against name_latin) |
+| `hunspell_latin_correction_in_dataset` | bool | True if Condition B correction matches any dataset name |
+| `pysc_orig_correction` | str\|None | pyspellchecker: top correction for original name |
 | `pysc_latin_correction` | str\|None | pyspellchecker: top correction for name_latin |
-| `pysc_orig_correction_in_dataset` | bool | Condition A correction matches a dataset name |
-| `pysc_latin_correction_in_dataset` | bool | Condition B correction matches a dataset name |
+| `pysc_orig_correction_in_dataset` | bool | True if Condition A pysc correction matches a dataset name |
+| `pysc_latin_correction_in_dataset` | bool | True if Condition B pysc correction matches a dataset name |
+
+The `*_correction_in_dataset` flag is analytically interesting: if a spell-checker "corrects" a non-Western name and the corrected form also exists in the dataset, it may indicate the tool is nudging the name towards a more Western/common alternative.
 
 ---
 
@@ -324,11 +326,12 @@ Already used as the data source — not used again as an independent validator
 
 | Script | Stage | Description |
 |--------|-------|-------------|
-| `scripts/database_v2.py` | 1 | Builds base parquet from `names_dataset`. |
-| `scripts/preprocess_names.py` | 2 | Adds `name_script` (Unicode script detection) and `name_latin` (anyascii transliteration). Must run before steps 3 and 4. |
-| `scripts/enrich_names.py` | 3 | Agreement scoring: ethnicolr (2 passes), langdetect, nationalize.io sample. Saves checkpoints after each step. |
-| `scripts/spellcheck_names.py` | 4 | Spell-check bias analysis: hunspell + pyspellchecker under Conditions A and B. Saves checkpoint after hunspell. |
-| `scripts/parquet_to_sqlite.py` | — | Optional: converts final parquet to SQLite for SQL querying. |
+| `scripts/database_v2.py` | 1 | Builds base parquet from `names_dataset`. Outputs `names_base.parquet`. |
+| `scripts/preprocess_names.py` | 2 | Adds `name_script` and `name_latin`. In-place on `names_base.parquet`. Must run before steps 3 and 4. |
+| `scripts/enrich_names.py` | 3 | Agreement scoring: ethnicolr (2 passes), langdetect, nationalize.io sample. Reads `names_base.parquet`, saves `names_results_base.parquet`. |
+| `scripts/spellcheck_names.py` | 4 | Spell-check known/unknown analysis. Reads and updates `names_results_base.parquet` in-place. |
+| `scripts/corrections_names.py` | 5 | Computes correction suggestions. Reads `names_results_base.parquet`, outputs `advanced_results_base.parquet`. Runs in parallel chunks on GitHub Actions. |
+| `scripts/parquet_to_sqlite.py` | — | Optional: converts any parquet to SQLite for SQL querying. Dict/array columns serialised to JSON strings. |
 | `scripts/run-dataset.py` | — | Early exploration; not part of production pipeline. |
 | `scripts/playground.py` | — | Tool exploration (ethnicolr, langdetect samples). |
 | `scripts/playground_name2nat.py` | — | name2nat testing; confirmed broken. |
@@ -336,29 +339,40 @@ Already used as the data source — not used again as an independent validator
 ### 7.2 Step order and dependencies
 
 ```
-database_v2.py          →  data/names_base.parquet (base columns only)
-preprocess_names.py     →  + name_script, name_latin
-enrich_names.py         →  + eth_*, langdetect_*, agreement_score
-                              (uses name_latin for ethnicolr pass 2)
-spellcheck_names.py     →  + hunspell_*, pysc_*
-                              (reads name_latin; fails if preprocess not run)
+database_v2.py          →  data/names_base.parquet
+                              (base columns + name_script + name_latin)
+enrich_names.py         →  data/names_results_base.parquet
+                              (+ ethnicolr_race, ethnicolr_prob, eth_distribution,
+                                 langdetect_*, top_country_langs, country_lang_comp,
+                                 agreement_score)
+                              [uses name_latin for ethnicolr pass 2]
+spellcheck_names.py     →  data/names_results_base.parquet  [in-place]
+                              (+ hunspell_*_known, pysc_*_known)
+corrections_names.py    →  data/advanced_results_base.parquet
+                              (+ hunspell_*_correction, pysc_*_correction, *_in_dataset)
 ```
 
-Each step reads the parquet, adds its columns, and writes it back in-place.
+Steps 1–4 run sequentially in one GitHub Actions job (`pipeline.yml`). The corrections step (step 5) runs as a separate workflow triggered manually after the pipeline completes.
+
+**Parquet file naming:**
+- `names_base.parquet` — output of database + preprocess steps
+- `names_results_base.parquet` — output of enrich + spellcheck steps (primary analysis file)
+- `advanced_results_base.parquet` — output of corrections step (adds suggestion columns)
 
 ### 7.3 Checkpointing
 
-`enrich_names.py` saves the parquet to disk after each major step:
+`enrich_names.py` saves `names_results_base.parquet` after each major step:
 
-| Checkpoint | Columns saved |
-|-----------|---------------|
-| After ethnicolr | eth_* + ethnicolr_race |
-| After langdetect | + langdetect_lang/prob |
-| After nationalize.io | + agreement_score (final save) |
+| Checkpoint | Columns saved at that point |
+|-----------|------------------------------|
+| After ethnicolr | ethnicolr_race, ethnicolr_prob, eth_distribution |
+| After langdetect | + langdetect_lang, langdetect_lang_name, langdetect_prob |
+| After nationalize.io | + agreement_score, top_country_langs, country_lang_comp (final save) |
 
-`spellcheck_names.py` saves after hunspell completes, before running
-pyspellchecker. If any later step crashes, the last checkpoint is already on
-disk.
+`spellcheck_names.py` saves `names_results_base.parquet` after hunspell
+completes, before running pyspellchecker. If any later step crashes, the
+last checkpoint is already on disk and will be captured by the GitHub Actions
+artifact upload (`if: always()`).
 
 ### 7.4 Environment and secrets
 
@@ -374,12 +388,19 @@ present and `load_dotenv()` is a no-op.
 
 ## 8. GitHub Actions Pipeline
 
-### 8.1 Workflow file
+### 8.1 Workflow files
 
-`.github/workflows/pipeline.yml` — triggered manually (`workflow_dispatch`)
-from the Actions tab.
+Three separate workflow files, all triggered manually (`workflow_dispatch`):
 
-### 8.2 Step sequence
+| File | Purpose | Trigger inputs |
+|------|---------|----------------|
+| `pipeline.yml` | Steps 1–4: build, preprocess, enrich, spellcheck | none |
+| `corrections_hunspell.yml` | Step 5a: hunspell corrections in 2 parallel chunks | `source_run_id` (pipeline run to download parquet from) |
+| `corrections_pysc.yml` | Step 5b: pyspellchecker corrections + merge | `source_run_id` (pipeline run), `hunspell_run_id` (hunspell workflow run) |
+
+The corrections are split across two separate workflows (rather than two jobs in one file) because each step gets its own 6-hour budget. When they were in one workflow the total wall time exceeded the 6-hour hard cap.
+
+### 8.2 pipeline.yml — step sequence
 
 | Step | Script | Notes |
 |------|--------|-------|
@@ -388,32 +409,47 @@ from the Actions tab.
 | 3 | `enrich_names.py` | Uses `NATIONALIZE_KEY` secret |
 | 4 | `spellcheck_names.py` | Requires `libenchant-2-dev` + `hunspell-en-us` system packages |
 
-### 8.3 Artifacts
-
-Two artifacts are uploaded after each run with `if: always()` (so partial
-results are preserved even if a step fails):
-- `names-enriched-<run_id>` — `data/names_base.parquet`
+**Artifacts uploaded** (with `if: always()` so partial results are preserved):
+- `names-enriched-<run_id>` — `data/names_results_base.parquet`
 - `logs-<run_id>` — all `.log` and `_report.md` files
 
-**To access:** GitHub repo → Actions tab → click the run → scroll to Artifacts
-section → download as zip.
+### 8.3 corrections_hunspell.yml — parallel chunk strategy
 
-### 8.4 Runtime estimate
+hunspell's `suggest()` is ~0.025 s/word. With ~786,000 unique unknowns across both conditions, serial processing takes ~5.5 hours — over the 6-hour limit. Solution: split unknowns alphabetically into 2 chunks using a matrix strategy, run both in parallel (~3–3.5 hours each).
+
+Each chunk job:
+1. Downloads `names_results_base.parquet` from the specified `source_run_id`
+2. Sorts all unknowns alphabetically and takes its slice
+3. Runs `corrections_names.py --mode hunspell-chunk --chunk N --total-chunks 2`
+4. Uploads `data/hunspell_corrections_chunk_N.json` as `hunspell-chunk-N-<run_id>` (7-day retention)
+
+Cross-run artifact downloads require `permissions: actions: read`.
+
+### 8.4 corrections_pysc.yml — merge and finalise
+
+1. Downloads `names_results_base.parquet` (from `source_run_id`)
+2. Downloads both `hunspell_corrections_chunk_0` and `hunspell_corrections_chunk_1` (from `hunspell_run_id`)
+3. Runs `corrections_names.py --mode pysc --total-chunks 2`
+   - Merges both JSON chunk files into one correction map
+   - Applies hunspell corrections to the dataframe
+   - Runs pyspellchecker corrections
+   - Saves `data/advanced_results_base.parquet`
+4. Uploads as `names-advanced-<run_id>` (90-day retention)
+
+### 8.5 Runtime estimates
 
 | Step | Estimated time |
 |------|---------------|
 | database_v2.py | ~20–30 min |
 | preprocess_names.py | ~5–10 min |
-| enrich_names.py (ethnicolr × 2) | ~3 min |
+| enrich_names.py (ethnicolr × 2 passes) | ~3 min |
 | enrich_names.py (langdetect) | ~2–3 hours *(main bottleneck)* |
 | enrich_names.py (nationalize.io) | ~10 min |
-| spellcheck_names.py (hunspell) | ~15–30 min |
-| spellcheck_names.py (pyspellchecker) | ~30–90 min |
-| **Total** | **~4–6 hours** |
-
-The 6-hour `timeout-minutes` cap in the workflow accommodates the full run.
-The pipeline is designed to be triggered once (or re-run if a step fails) with
-all processing on GitHub's infrastructure.
+| spellcheck_names.py (hunspell known/unknown) | ~15–30 min |
+| spellcheck_names.py (pyspellchecker known/unknown) | ~30–90 min |
+| **pipeline.yml total** | **~4–6 hours** |
+| corrections_hunspell.yml (each of 2 parallel chunks) | ~3–3.5 hours |
+| corrections_pysc.yml | ~2+ hours |
 
 ---
 
@@ -436,6 +472,11 @@ all processing on GitHub's infrastructure.
 | Checkpoint saves within long scripts | enrich_names.py and spellcheck_names.py save the parquet after each major step so that a crash in a later step does not lose hours of completed work. |
 | Secrets in .env locally / GitHub Secrets in CI | .env is gitignored. The same environment variable (`NATIONALIZE_KEY`) is used in both contexts; `load_dotenv()` is a no-op when the variable is already in the environment. |
 | name2nat rejected | Confirmed broken on Python 3.11 and 3.13 due to PyTorch GRU serialisation format change (`_flat_weights` → `_all_weights`). Would require a Python 3.6 legacy environment. |
+| eth_distribution replaces 13 eth_* columns | Storing 13 individual float columns is verbose and wasteful for a dataset used primarily via pandas/SQL. A single dict column captures all the information in a more compact schema. Values are rounded to 4 decimal places. |
+| Hunspell corrections split into 2 parallel chunks | ~786k unique unknowns × 0.025 s = ~5.5 hours serial. Splitting alphabetically into 2 chunks of ~393k each yields ~3–3.5 hours per chunk, within the 6-hour GitHub Actions job limit. |
+| Separate corrections workflows (not two jobs in one file) | Even after parallelising hunspell, the pysc corrections step alone takes 2+ hours. If both lived in one workflow file, the total wall time (hunspell wait + pysc) would exceed 6 hours. Separate workflows each get their own 6-hour budget. |
+| Filter single-character-part names | Names like "A A" where every space-separated token is ≤ 1 character are artefacts from the names_dataset source, not real names. Removing them avoids polluting spell-check results with trivially unrecognisable tokens. |
+| *_correction_in_dataset flag | Checking whether the suggested correction is itself a name in the dataset surfaces cases where the spell-checker nudges a non-Western name towards a more Western/common alternative — a potentially interesting secondary bias signal. |
 
 ---
 
@@ -443,31 +484,36 @@ all processing on GitHub's infrastructure.
 
 ```
 HonsProject/
-├── .env                         # Local secrets (gitignored)
+├── .env                              # Local secrets (gitignored)
 ├── .github/
 │   └── workflows/
-│       └── pipeline.yml         # GitHub Actions pipeline (manual trigger)
-├── .gitignore                   # Excludes data/, .env, logs/, __pycache__/
-├── requirements.txt             # All Python dependencies
-├── PROJECT_NOTES.md             # This file
-├── data/                        # Gitignored — generated by pipeline
-│   ├── names_base.parquet       # Primary dataset (all pipeline columns)
-│   ├── names.db                 # SQLite copy v1 (optional)
-│   └── names2.db                # SQLite copy v2 (optional)
-├── logs/                        # Gitignored — generated by scripts
+│       ├── pipeline.yml              # Steps 1–4: build → enrich → spellcheck
+│       ├── corrections_hunspell.yml  # Step 5a: parallel hunspell chunks
+│       └── corrections_pysc.yml      # Step 5b: pysc corrections + merge
+├── .gitignore                        # Excludes data/, .env, logs/, __pycache__/
+├── requirements.txt                  # All Python dependencies
+├── PROJECT_NOTES.md                  # This file
+├── data/                             # Gitignored — generated by pipeline
+│   ├── names_base.parquet            # After steps 1–2 (base + script + latin)
+│   ├── names_results_base.parquet    # After steps 3–4 (enrich + spellcheck)
+│   ├── advanced_results_base.parquet # After step 5 (corrections)
+│   └── names.db                      # SQLite copy (optional, from parquet_to_sqlite.py)
+├── logs/                             # Gitignored — generated by scripts
 │   ├── spellcheck_<ts>.log
 │   ├── spellcheck_<ts>_report.md
-│   └── (enrich logs to be added)
+│   └── corrections_<mode>_<ts>.log
 ├── notebooks/
 │   ├── 01_explore_dataset.ipynb
-│   └── 02_explore_names2.ipynb
+│   ├── 02_explore_names2.ipynb
+│   └── 03_explore_names_results.ipynb
 └── scripts/
-    ├── database_v2.py           # Pipeline step 1: build base dataset
-    ├── preprocess_names.py      # Pipeline step 2: name_script + name_latin
-    ├── enrich_names.py          # Pipeline step 3: agreement scoring
-    ├── spellcheck_names.py      # Pipeline step 4: spell-check bias analysis
-    ├── parquet_to_sqlite.py     # Optional: convert parquet → SQLite
-    ├── run-dataset.py           # Early exploration (not production)
-    ├── playground.py            # Tool exploration (not production)
-    └── playground_name2nat.py   # name2nat testing (not production)
+    ├── database_v2.py                # Step 1: build base dataset
+    ├── preprocess_names.py           # Step 2: name_script + name_latin
+    ├── enrich_names.py               # Step 3: ethnicolr + langdetect + nationalize.io
+    ├── spellcheck_names.py           # Step 4: known/unknown spell-check
+    ├── corrections_names.py          # Step 5: correction suggestions (chunked)
+    ├── parquet_to_sqlite.py          # Optional: convert parquet → SQLite
+    ├── run-dataset.py                # Early exploration (not production)
+    ├── playground.py                 # Tool exploration (not production)
+    └── playground_name2nat.py        # name2nat testing (not production)
 ```
