@@ -186,6 +186,26 @@ function of the script (the tool cannot process non-Latin characters) or of
 the lexical/phonological origin of the name (the tool does not recognise the
 name even when rendered in Latin letters)?
 
+### 5.1.1 Dataset cleaning for the spell-check analysis
+
+Before running the spell-check analysis, a cleaning pass filters the dataset
+to names that are meaningful inputs for a spell-checker:
+
+**Kept:**
+- Single-word names (no spaces) — multi-word entries like `"A Abdul"` are composites, not single given names
+- Names containing only Unicode letters (`L*` category) and combining marks (`M*` category)
+- Names with accented Latin characters (e.g. `Nguyễn`, `José`) — these are legitimate names and the accent is meaningful
+- Names in non-Latin scripts (Arabic, Cyrillic, Devanagari, CJK etc.) — kept for the Condition A/B comparison
+
+**Filtered out:**
+- Names containing digits (`0–9`)
+- Names containing noise characters: `*`, `.`, `,`, `_`, `+`, `=`, `@`, `#`, etc.
+- Hyphens and apostrophes are borderline — still under consideration (e.g. `Mary-Jane`, `O'Brien` are legitimate names; but `*-` style entries are artefacts)
+
+**Rationale:** The core research question is about phonological/lexical bias, not about how spell-checkers handle punctuation or digits. Noise characters would make it impossible to distinguish "spell-checker doesn't recognise this name" from "spell-checker doesn't accept strings with punctuation in them". Cleaning isolates the variable of interest.
+
+**Note on combining marks:** Initial filter implementation only allowed Unicode letter categories (`L*`), which incorrectly excluded Devanagari names like `देवेंद्र` (contains `ं` anusvara and `्र` virama, both category `M`). Fixed to allow both `L*` and `M*` categories.
+
 ### 5.2 Double-run design
 
 Each name is processed under two conditions:
@@ -223,7 +243,24 @@ anyascii's output for Arabic names (e.g. "mhmd" for محمد) does not match the
 standard English romanisation ("Muhammad"). Condition B may therefore understate
 recognition rates for Arabic/Hebrew names specifically.
 
-### 5.4 Ideographic script correction nulling
+### 5.4 Sentence-context experiment (investigated, rejected)
+
+Before committing to the full pipeline, a sandbox test (`scripts/sandbox_sentence_check.py`) investigated whether checking a name in a sentence context would yield different results from checking it standalone. Four formats were tested:
+
+| Format | Example |
+|--------|---------|
+| Standalone | `Fatima` |
+| Sentence-end | `My name is Fatima` |
+| Sentence-start | `Fatima is my name` |
+| Sentence-middle | `My name is Fatima and that is a fact` |
+
+**Finding — Approach A (whole sentence string passed to hunspell):** Hunspell treats the entire string as one word and applies edit-distance substitutions at arbitrary positions across the full string (e.g. `"My name is Fatima"` → `['My neime is Fatima', 'My neyme is Fatima']`). The suggestions are meaningless noise and bear no relation to name correction. Not usable.
+
+**Finding — Approach B (sentence split into tokens, each checked separately):** The result for the name token is identical regardless of whether it appears standalone, at the start, middle, or end of a sentence. Hunspell is purely word-level with no context awareness. Sentence position adds nothing.
+
+**Conclusion:** The sentence-context design was abandoned. Hunspell is word-level; position is irrelevant. Adding sentence variants would triple compute time with no additional information. The double-run design (original vs. transliterated) remains the primary comparison axis.
+
+### 5.5 Ideographic script correction nulling
 
 For names in CJK, Hangul, Hiragana, and Katakana scripts, each character
 occupies a single Unicode codepoint. A 2-character Chinese name has string
@@ -477,6 +514,9 @@ Cross-run artifact downloads require `permissions: actions: read`.
 | Separate corrections workflows (not two jobs in one file) | Even after parallelising hunspell, the pysc corrections step alone takes 2+ hours. If both lived in one workflow file, the total wall time (hunspell wait + pysc) would exceed 6 hours. Separate workflows each get their own 6-hour budget. |
 | Filter single-character-part names | Names like "A A" where every space-separated token is ≤ 1 character are artefacts from the names_dataset source, not real names. Removing them avoids polluting spell-check results with trivially unrecognisable tokens. |
 | *_correction_in_dataset flag | Checking whether the suggested correction is itself a name in the dataset surfaces cases where the spell-checker nudges a non-Western name towards a more Western/common alternative — a potentially interesting secondary bias signal. |
+| Sentence context investigated and rejected | Tested 4 formats (standalone, sentence-start, sentence-mid, sentence-end). Approach A (whole string to hunspell) produces garbage edit-distance substitutions across the full string. Approach B (token-level) gives identical results in all positions — hunspell has no context awareness. Sentence variants would triple compute time for zero additional information. |
+| Clean filter allows Unicode combining marks (M*) | Initial filter restricted to letter categories (L*) only, which incorrectly excluded valid names in scripts that use combining diacritics (Devanagari anusvara, Arabic harakat). Fixed to allow L* and M* categories together. |
+| Dataset cleaning to single-word, noise-free names | For the spell-check analysis, multi-word entries and names with digits or noise characters (*, ., etc.) are filtered out. This isolates the phonological/lexical bias signal from confounds introduced by punctuation and non-name tokens. Accented Latin and non-Latin scripts are kept. |
 
 ---
 
