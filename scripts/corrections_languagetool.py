@@ -261,10 +261,10 @@ def run_merge(df: pd.DataFrame, total_chunks: int) -> None:
     df.loc[df["lt_latin_known"], "lt_latin_correction"] = None
 
     df["lt_orig_correction_in_dataset"] = (
-        df["lt_orig_correction"].str.lower().isin(dataset_latin_set)
+        df["lt_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
     df["lt_latin_correction_in_dataset"] = (
-        df["lt_latin_correction"].str.lower().isin(dataset_latin_set)
+        df["lt_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
 
     pct_orig = 100 * df["lt_orig_known"].sum() / len(df)

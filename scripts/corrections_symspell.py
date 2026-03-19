@@ -234,10 +234,10 @@ def main():
         df["hunspell_latin_correction"] = df["name_latin"].map(h_corr_map)
         df.loc[ideographic_mask, "hunspell_orig_correction"] = None
         df["hunspell_orig_correction_in_dataset"] = (
-            df["hunspell_orig_correction"].str.lower().isin(dataset_latin_set)
+            df["hunspell_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
         )
         df["hunspell_latin_correction_in_dataset"] = (
-            df["hunspell_latin_correction"].str.lower().isin(dataset_latin_set)
+            df["hunspell_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
         )
         log.info("  Orig  corrections: %s",
                  f"{df['hunspell_orig_correction'].notna().sum():,}")
@@ -304,10 +304,10 @@ def main():
     df.loc[df["symspell_latin_known"], "symspell_latin_correction"] = None
 
     df["symspell_orig_correction_in_dataset"] = (
-        df["symspell_orig_correction"].str.lower().isin(dataset_latin_set)
+        df["symspell_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
     df["symspell_latin_correction_in_dataset"] = (
-        df["symspell_latin_correction"].str.lower().isin(dataset_latin_set)
+        df["symspell_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
 
     n_orig_corr = df["symspell_orig_correction"].notna().sum()
