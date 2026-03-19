@@ -1,0 +1,161 @@
+name: Corrections — LanguageTool
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Run ID of the Corrections — SymSpell workflow (names-intermediate artifact)'
+        required: true
+        type: string
+
+jobs:
+  lt-chunk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      matrix:
+        chunk: [0, 1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p data logs
+
+      - name: Download enriched dataset from main pipeline
+        uses: actions/download-artifact@v4
+        with:
+          name: names-intermediate-${{ inputs.source_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Run LanguageTool corrections (chunk ${{ matrix.chunk }} of 4)
+        run: |
+          python scripts/corrections_languagetool.py \
+            --mode chunk \
+            --chunk ${{ matrix.chunk }} \
+            --total-chunks 4 \
+            --threads 8
+
+      - name: Upload chunk ${{ matrix.chunk }} JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lt-chunk-${{ matrix.chunk }}-${{ github.run_id }}
+          path: data/lt_chunk_${{ matrix.chunk }}.json
+          retention-days: 7
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lt-logs-chunk-${{ matrix.chunk }}-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
+
+  lt-merge:
+    needs: lt-chunk
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p data logs
+
+      - name: Download enriched dataset from main pipeline
+        uses: actions/download-artifact@v4
+        with:
+          name: names-intermediate-${{ inputs.source_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Download chunk 0 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: lt-chunk-0-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Download chunk 1 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: lt-chunk-1-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Download chunk 2 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: lt-chunk-2-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Download chunk 3 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: lt-chunk-3-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Run LanguageTool merge
+        run: python scripts/corrections_languagetool.py --mode merge --total-chunks 4
+
+      - name: Upload final dataset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: names-final-${{ github.run_id }}
+          path: data/final_results.parquet
+          retention-days: 90
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lt-logs-merge-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
