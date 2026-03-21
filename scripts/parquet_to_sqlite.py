@@ -2,9 +2,9 @@ import pandas as pd
 import json
 from sqlalchemy import create_engine
 
-PARQUET_DATA_PATH = "data/names_results_base_cleaned.parquet"
+PARQUET_DATA_PATH = "data/final_results.parquet"
 # Remember to change filepath for new database
-SQLITE_PATH = "data/names_results2.db"
+SQLITE_PATH = "data/full_results1.db"
 
 df = pd.read_parquet(PARQUET_DATA_PATH)
 

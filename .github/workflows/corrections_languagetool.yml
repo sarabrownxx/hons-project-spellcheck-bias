@@ -7,6 +7,11 @@ on:
         description: 'Run ID of the Corrections — SymSpell workflow (names-intermediate artifact)'
         required: true
         type: string
+      lt_language:
+        description: "Language passed to LT per request: 'en-US' (default) or 'auto' (language-all)"
+        required: false
+        default: 'en-US'
+        type: string
 
 jobs:
   lt-chunk:
@@ -52,14 +57,15 @@ jobs:
             --mode chunk \
             --chunk ${{ matrix.chunk }} \
             --total-chunks 4 \
-            --threads 8
+            --threads 8 \
+            --lt-language ${{ inputs.lt_language }}
 
       - name: Upload chunk ${{ matrix.chunk }} JSON
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lt-chunk-${{ matrix.chunk }}-${{ github.run_id }}
-          path: data/lt_chunk_${{ matrix.chunk }}.json
+          path: data/${{ inputs.lt_language == 'auto' && 'lt_auto' || 'lt' }}_chunk_${{ matrix.chunk }}.json
           retention-days: 90
 
       - name: Upload logs
@@ -142,14 +148,18 @@ jobs:
           run-id: ${{ github.run_id }}
 
       - name: Run LanguageTool merge
-        run: python scripts/corrections_languagetool.py --mode merge --total-chunks 4
+        run: |
+          python scripts/corrections_languagetool.py \
+            --mode merge \
+            --total-chunks 4 \
+            --lt-language ${{ inputs.lt_language }}
 
       - name: Upload final dataset
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: names-final-${{ github.run_id }}
-          path: data/final_results.parquet
+          path: data/${{ inputs.lt_language == 'auto' && 'final_results_langall' || 'final_results' }}.parquet
           retention-days: 90
 
       - name: Upload logs

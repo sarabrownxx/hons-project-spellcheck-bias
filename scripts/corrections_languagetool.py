@@ -12,13 +12,23 @@ Modes (--mode):
           and save data/lt_results.parquet. Does not call the LT server.
   both    Run chunk + merge in a single process (default; for local use).
 
-New columns added:
-  lt_orig_known                 — bool, Condition A (original name)
-  lt_latin_known                — bool, Condition B (latinised name)
-  lt_orig_correction            — str | None, top suggestion for unknowns
-  lt_latin_correction           — str | None, top suggestion for unknowns
-  lt_orig_correction_in_dataset — bool, whether correction appears in name corpus
-  lt_latin_correction_in_dataset— bool, whether correction appears in name corpus
+Language mode (--lt-language):
+  en-US   (default) English-only LT server; each word checked against the English
+          Morfologik dictionary. Columns prefixed lt_*.
+          Output: data/final_results.parquet
+  auto    LT server with language auto-detection per request. LT attempts to
+          identify the language of each token and apply the appropriate dictionary.
+          Requires language-all JAR (language_tool_python downloads it automatically
+          when initialised with "auto"). Columns prefixed lt_auto_*.
+          Output: data/final_results_langall.parquet
+
+New columns added (prefix = lt_ or lt_auto_ depending on --lt-language):
+  {p}orig_known                 — bool, Condition A (original name)
+  {p}latin_known                — bool, Condition B (latinised name)
+  {p}orig_correction            — str | None, top suggestion for unknowns
+  {p}latin_correction           — str | None, top suggestion for unknowns
+  {p}orig_correction_in_dataset — bool, whether correction appears in name corpus
+  {p}latin_correction_in_dataset— bool, whether correction appears in name corpus
 
 Notes:
   - LanguageTool is case-sensitive. Names are passed to LT as-is (not lowercased),
@@ -26,7 +36,7 @@ Notes:
     "fatima" would be checked separately if both appeared — but since all names
     are unique in the dataset, each name is checked exactly once.
   - Ideographic-script rows (CJK, Hangul, Hiragana, Katakana) are excluded from
-    Condition A words sent to LT; lt_orig_correction is set to None for these rows.
+    Condition A words sent to LT; {p}orig_correction is set to None for these rows.
     Condition B (name_latin) has no ideographic exclusion as anyascii output is Latin.
   - Threading: LanguageTool's Python wrapper is not thread-safe. This script uses
     direct HTTP requests via per-thread requests.Session objects instead.
@@ -37,6 +47,7 @@ Usage:
   python scripts/corrections_languagetool.py --mode both
   python scripts/corrections_languagetool.py --mode chunk --chunk 0 --total-chunks 4
   python scripts/corrections_languagetool.py --mode merge --total-chunks 4
+  python scripts/corrections_languagetool.py --mode both --lt-language auto
 """
 
 import argparse
@@ -58,8 +69,22 @@ load_dotenv()
 import pandas as pd
 
 LOGS_DIR = Path("logs")
-OUTPUT_PATH = Path("data/final_results.parquet")
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
+
+
+def _output_path(lt_language: str) -> Path:
+    if lt_language == "auto":
+        return Path("data/final_results_langall.parquet")
+    return Path("data/final_results.parquet")
+
+
+def _chunk_path_for(chunk: int, lt_language: str) -> Path:
+    prefix = "lt_auto" if lt_language == "auto" else "lt"
+    return Path(f"data/{prefix}_chunk_{chunk}.json")
+
+
+def _col_prefix(lt_language: str) -> str:
+    return "lt_auto_" if lt_language == "auto" else "lt_"
 
 _thread_local = threading.local()
 
@@ -70,7 +95,7 @@ def _get_session() -> _requests.Session:
     return _thread_local.session
 
 
-def _check_one(word: str, lt_url: str) -> tuple:
+def _check_one(word: str, lt_url: str, lt_language: str = "en-US") -> tuple:
     """Check a single word with LanguageTool via HTTP.
 
     Returns (word, known: bool, correction: str | None).
@@ -78,7 +103,7 @@ def _check_one(word: str, lt_url: str) -> tuple:
     """
     try:
         resp = _get_session().get(
-            lt_url, params={"language": "en-US", "text": word}, timeout=30
+            lt_url, params={"language": lt_language, "text": word}, timeout=30
         )
         resp.raise_for_status()
         matches = [
@@ -97,7 +122,8 @@ def _check_one(word: str, lt_url: str) -> tuple:
         return word, True, None  # treat as known on error
 
 
-def _lt_check_batch(words: list, lt_url: str, n_threads: int, label: str) -> dict:
+def _lt_check_batch(words: list, lt_url: str, n_threads: int, label: str,
+                    lt_language: str = "en-US") -> dict:
     """Check a list of words with LanguageTool using a thread pool.
 
     Returns a dict: {word: (known: bool, correction: str | None)}.
@@ -109,7 +135,7 @@ def _lt_check_batch(words: list, lt_url: str, n_threads: int, label: str) -> dic
     done = 0
 
     with ThreadPoolExecutor(max_workers=n_threads) as ex:
-        futures = {ex.submit(_check_one, w, lt_url): w for w in words}
+        futures = {ex.submit(_check_one, w, lt_url, lt_language): w for w in words}
         for fut in as_completed(futures):
             word, known, correction = fut.result()
             results[word] = (known, correction)
@@ -148,8 +174,6 @@ def _find_parquet() -> Path:
     )
 
 
-def _chunk_path(chunk: int) -> Path:
-    return Path(f"data/lt_chunk_{chunk}.json")
 
 
 def setup_logging(timestamp: str, mode: str) -> Path:
@@ -179,7 +203,7 @@ def _pkg(name: str) -> str:
 
 
 def run_chunk(df: pd.DataFrame, chunk: int, total_chunks: int,
-              n_threads: int, lt_url: str) -> None:
+              n_threads: int, lt_url: str, lt_language: str = "en-US") -> None:
     """Check one chunk of words and save results to a JSON file."""
     ideographic_mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
 
@@ -201,7 +225,8 @@ def run_chunk(df: pd.DataFrame, chunk: int, total_chunks: int,
 
     batch_results = _lt_check_batch(
         words_this_chunk, lt_url, n_threads,
-        label=f"lt chunk {chunk}/{total_chunks}"
+        label=f"lt chunk {chunk}/{total_chunks}",
+        lt_language=lt_language,
     )
 
     known_map = {w: batch_results[w][0] for w in batch_results}
@@ -211,7 +236,7 @@ def run_chunk(df: pd.DataFrame, chunk: int, total_chunks: int,
         if not batch_results[w][0]
     }
 
-    out = _chunk_path(chunk)
+    out = _chunk_path_for(chunk, lt_language)
     out.parent.mkdir(exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"known_map": known_map, "correction_map": correction_map},
@@ -220,8 +245,11 @@ def run_chunk(df: pd.DataFrame, chunk: int, total_chunks: int,
              chunk, f"{len(known_map):,}", f"{len(correction_map):,}", out)
 
 
-def run_merge(df: pd.DataFrame, total_chunks: int) -> None:
+def run_merge(df: pd.DataFrame, total_chunks: int, lt_language: str = "en-US") -> None:
     """Load all chunk JSONs, assemble LT columns, and save final parquet."""
+    p_col = _col_prefix(lt_language)
+    output_path = _output_path(lt_language)
+
     log.info("")
     log.info("[loading chunk JSON files]")
 
@@ -229,7 +257,7 @@ def run_merge(df: pd.DataFrame, total_chunks: int) -> None:
     combined_correction_map: dict = {}
 
     for i in range(total_chunks):
-        p = _chunk_path(i)
+        p = _chunk_path_for(i, lt_language)
         if p.exists():
             with open(p, encoding="utf-8") as f:
                 data = json.load(f)
@@ -248,37 +276,37 @@ def run_merge(df: pd.DataFrame, total_chunks: int) -> None:
     ideographic_mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
 
     log.info("")
-    log.info("[mapping LT results to dataframe]")
+    log.info("[mapping LT results to dataframe (column prefix: %s)]", p_col)
 
-    df["lt_orig_known"] = df["name"].map(combined_known_map).fillna(False).astype(bool)
-    df["lt_latin_known"] = df["name_latin"].map(combined_known_map).fillna(False).astype(bool)
+    df[f"{p_col}orig_known"] = df["name"].map(combined_known_map).fillna(False).astype(bool)
+    df[f"{p_col}latin_known"] = df["name_latin"].map(combined_known_map).fillna(False).astype(bool)
 
-    df["lt_orig_correction"] = df["name"].map(combined_correction_map)
-    df.loc[df["lt_orig_known"], "lt_orig_correction"] = None
-    df.loc[ideographic_mask, "lt_orig_correction"] = None
+    df[f"{p_col}orig_correction"] = df["name"].map(combined_correction_map)
+    df.loc[df[f"{p_col}orig_known"], f"{p_col}orig_correction"] = None
+    df.loc[ideographic_mask, f"{p_col}orig_correction"] = None
 
-    df["lt_latin_correction"] = df["name_latin"].map(combined_correction_map)
-    df.loc[df["lt_latin_known"], "lt_latin_correction"] = None
+    df[f"{p_col}latin_correction"] = df["name_latin"].map(combined_correction_map)
+    df.loc[df[f"{p_col}latin_known"], f"{p_col}latin_correction"] = None
 
-    df["lt_orig_correction_in_dataset"] = (
-        df["lt_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
+    df[f"{p_col}orig_correction_in_dataset"] = (
+        df[f"{p_col}orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
-    df["lt_latin_correction_in_dataset"] = (
-        df["lt_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
+    df[f"{p_col}latin_correction_in_dataset"] = (
+        df[f"{p_col}latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
     )
 
-    pct_orig = 100 * df["lt_orig_known"].sum() / len(df)
-    pct_latin = 100 * df["lt_latin_known"].sum() / len(df)
+    pct_orig = 100 * df[f"{p_col}orig_known"].sum() / len(df)
+    pct_latin = 100 * df[f"{p_col}latin_known"].sum() / len(df)
     log.info("  Orig  known: %s / %s  (%.1f%%)",
-             f"{df['lt_orig_known'].sum():,}", f"{len(df):,}", pct_orig)
+             f"{df[f'{p_col}orig_known'].sum():,}", f"{len(df):,}", pct_orig)
     log.info("  Latin known: %s / %s  (%.1f%%)",
-             f"{df['lt_latin_known'].sum():,}", f"{len(df):,}", pct_latin)
-    log.info("  Orig  corrections: %s", f"{df['lt_orig_correction'].notna().sum():,}")
-    log.info("  Latin corrections: %s", f"{df['lt_latin_correction'].notna().sum():,}")
+             f"{df[f'{p_col}latin_known'].sum():,}", f"{len(df):,}", pct_latin)
+    log.info("  Orig  corrections: %s", f"{df[f'{p_col}orig_correction'].notna().sum():,}")
+    log.info("  Latin corrections: %s", f"{df[f'{p_col}latin_correction'].notna().sum():,}")
 
-    OUTPUT_PATH.parent.mkdir(exist_ok=True)
-    log.info("Saving to %s…", OUTPUT_PATH)
-    df.to_parquet(OUTPUT_PATH, index=False)
+    output_path.parent.mkdir(exist_ok=True)
+    log.info("Saving to %s…", output_path)
+    df.to_parquet(output_path, index=False)
     log.info("  Saved %s rows, %s columns", f"{len(df):,}", f"{len(df.columns):,}")
 
 
@@ -291,16 +319,21 @@ def main():
                         help="Total number of chunks")
     parser.add_argument("--threads", type=int, default=8,
                         help="Number of threads for HTTP requests (default 8)")
+    parser.add_argument("--lt-language", default="en-US",
+                        help="Language passed to LT per request. Use 'auto' for "
+                             "language-all mode (downloads full LT JAR, auto-detects "
+                             "per token). Default: en-US")
     args = parser.parse_args()
     mode = args.mode
+    lt_language = args.lt_language
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     LOGS_DIR.mkdir(exist_ok=True)
     log_path = setup_logging(timestamp, mode)
 
     log.info("=" * 70)
-    log.info("corrections_languagetool.py  mode=%s  chunk=%s/%s  —  %s",
-             mode, args.chunk, args.total_chunks, timestamp)
+    log.info("corrections_languagetool.py  mode=%s  chunk=%s/%s  lt-language=%s  —  %s",
+             mode, args.chunk, args.total_chunks, lt_language, timestamp)
     log.info("=" * 70)
     log.info("language_tool_python %s", _pkg("language_tool_python"))
 
@@ -318,15 +351,15 @@ def main():
     if mode in ("chunk", "both"):
         import language_tool_python
         log.info("")
-        log.info("[starting LanguageTool server]")
-        tool = language_tool_python.LanguageTool("en-US")
+        log.info("[starting LanguageTool server (language=%s)]", lt_language)
+        tool = language_tool_python.LanguageTool(lt_language)
         lt_url = tool.url.rstrip("/") + "/check"
         log.info("  LT version: %s", tool.language_tool_download_version)
         log.info("  LT URL: %s", lt_url)
 
         log.info("")
         log.info("[Condition A+B chunk — chunk %d of %d]", args.chunk, args.total_chunks)
-        run_chunk(df, args.chunk, args.total_chunks, args.threads, lt_url)
+        run_chunk(df, args.chunk, args.total_chunks, args.threads, lt_url, lt_language)
 
         tool.close()
 
@@ -337,7 +370,7 @@ def main():
     if mode in ("merge", "both"):
         log.info("")
         log.info("[merge — assembling LT columns from %d chunk(s)]", args.total_chunks)
-        run_merge(df, args.total_chunks)
+        run_merge(df, args.total_chunks, lt_language)
 
     log.info("Done.  Log: %s", log_path)
 
