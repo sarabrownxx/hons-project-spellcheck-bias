@@ -223,10 +223,8 @@ def _script_breakdown(df: pd.DataFrame) -> dict:
         n = len(grp)
         result[script] = {
             "n": n,
-            "hunspell_pct_orig_known":   round(100 * grp["hunspell_orig_known"].mean(), 2),
-            "hunspell_pct_latin_known":  round(100 * grp["hunspell_latin_known"].mean(), 2),
-            "pysc_pct_orig_known":       round(100 * grp["pysc_orig_known"].mean(), 2),
-            "pysc_pct_latin_known":      round(100 * grp["pysc_latin_known"].mean(), 2),
+            "hunspell_pct_orig_known":  round(100 * grp["hunspell_orig_known"].mean(), 2),
+            "hunspell_pct_latin_known": round(100 * grp["hunspell_latin_known"].mean(), 2),
         }
     return result
 
@@ -238,8 +236,6 @@ def _country_breakdown(df: pd.DataFrame) -> dict:
             "n": len(grp),
             "hunspell_pct_orig_known":  round(100 * grp["hunspell_orig_known"].mean(), 2),
             "hunspell_pct_latin_known": round(100 * grp["hunspell_latin_known"].mean(), 2),
-            "pysc_pct_orig_known":      round(100 * grp["pysc_orig_known"].mean(), 2),
-            "pysc_pct_latin_known":     round(100 * grp["pysc_latin_known"].mean(), 2),
         }
     return result
 
@@ -277,11 +273,11 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
     p("- **Condition B (transliterated):** the `name_latin` column produced by "
       "`anyascii` in `preprocess_names.py`, so all names are in a Latin/ASCII "
       "form the spell-checkers were designed to process.")
-    p("Two independent spell-checkers are used so findings can be corroborated "
-      "or contrasted across tools with different underlying algorithms.")
+    p("hunspell is used to classify each name as known or unknown under each "
+      "condition and to generate correction suggestions for unknown names.")
 
-    h(2, "3. Spell-Checkers")
-    h(3, "3.1 hunspell (primary)")
+    h(2, "3. Spell-Checker")
+    h(3, "3.1 hunspell")
     p("- **Library:** `pyenchant` v" + stats["hunspell"]["version"] +
       ", dictionary: " + stats["hunspell"]["dictionary"])
     p("- **Rationale:** hunspell is the engine behind LibreOffice, Firefox, "
@@ -290,28 +286,15 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
       "significance.")
     p("- **API used:** `enchant.Dict.check(word)` (known/unknown).")
 
-    h(3, "3.2 pyspellchecker (secondary baseline)")
-    p("- **Library:** `pyspellchecker` v" + stats["pysc"]["version"])
-    p("- **Rationale:** Uses a pre-built English word-frequency dictionary "
-      "with Damerau-Levenshtein edit-distance candidate generation (Norvig "
-      "approach). Algorithmically distinct from hunspell, enabling comparison "
-      "of bias across different spell-check strategies.")
-
     p("Note: correction suggestions are computed separately by "
       "`corrections_names.py` and are not included in this report.")
 
     h(2, "4. Results — Overall")
     table(
-        ["Tool", "Condition", "% names recognised"],
+        ["Condition", "% names recognised"],
         [
-            ["hunspell",         "A — original script",
-             str(stats["hunspell"]["pct_orig_known"]) + "%"],
-            ["hunspell",         "B — anyascii (Latin)",
-             str(stats["hunspell"]["pct_latin_known"]) + "%"],
-            ["pyspellchecker",   "A — original script",
-             str(stats["pysc"]["pct_orig_known"]) + "%"],
-            ["pyspellchecker",   "B — anyascii (Latin)",
-             str(stats["pysc"]["pct_latin_known"]) + "%"],
+            ["A — original script",  str(stats["hunspell"]["pct_orig_known"]) + "%"],
+            ["B — anyascii (Latin)", str(stats["hunspell"]["pct_latin_known"]) + "%"],
         ]
     )
     p("A gap between Condition A and B for non-Latin scripts indicates "
@@ -320,34 +303,27 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
 
     h(2, "5. Results — Breakdown by Script")
     table(
-        ["Script", "n",
-         "hn orig%", "hn latin%", "hn Δ",
-         "py orig%", "py latin%", "py Δ"],
+        ["Script", "n", "orig%", "latin%", "Δ"],
         [
             (s,
              f"{d['n']:,}",
              f"{d['hunspell_pct_orig_known']:.1f}%",
              f"{d['hunspell_pct_latin_known']:.1f}%",
-             f"{d['hunspell_pct_latin_known'] - d['hunspell_pct_orig_known']:+.1f}pp",
-             f"{d['pysc_pct_orig_known']:.1f}%",
-             f"{d['pysc_pct_latin_known']:.1f}%",
-             f"{d['pysc_pct_latin_known'] - d['pysc_pct_orig_known']:+.1f}pp")
+             f"{d['hunspell_pct_latin_known'] - d['hunspell_pct_orig_known']:+.1f}pp")
             for s, d in sorted(stats["script_breakdown"].items(),
                                 key=lambda x: -x[1]["n"])
         ]
     )
-    p("hn = hunspell, py = pyspellchecker, Δ = Condition B minus Condition A.")
+    p("Δ = Condition B minus Condition A (hunspell en_US).")
 
     h(2, "6. Results — Breakdown by Country of Origin")
     p("Recognition rates per `top_country`, sorted by name count descending.")
     table(
-        ["Country", "n", "hn orig%", "hn latin%", "py orig%", "py latin%"],
+        ["Country", "n", "orig%", "latin%"],
         [
             (c, f"{d['n']:,}",
              f"{d['hunspell_pct_orig_known']:.1f}%",
-             f"{d['hunspell_pct_latin_known']:.1f}%",
-             f"{d['pysc_pct_orig_known']:.1f}%",
-             f"{d['pysc_pct_latin_known']:.1f}%")
+             f"{d['hunspell_pct_latin_known']:.1f}%")
             for c, d in sorted(stats["country_breakdown"].items(),
                                 key=lambda x: -x[1]["n"])
         ]
@@ -361,13 +337,9 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
              "hunspell en_US: original name is in dictionary"],
             ["hunspell_latin_known", "bool",
              "hunspell en_US: name_latin is in dictionary"],
-            ["pysc_orig_known",      "bool",
-             "pyspellchecker: original name is recognised"],
-            ["pysc_latin_known",     "bool",
-             "pyspellchecker: name_latin is recognised"],
         ]
     )
-    p("Correction columns (`*_correction`, `*_correction_in_dataset`) are "
+    p("Correction columns (`*_correction`, `*_correction_match`) are "
       "added by `corrections_names.py`.")
 
     h(2, "8. Limitations")
@@ -404,10 +376,9 @@ def main():
     log.info("=" * 70)
 
     packages = {
-        "pyenchant":        enchant.__version__,
-        "pyspellchecker":   _pkg("pyspellchecker"),
-        "anyascii":         _pkg("anyascii"),
-        "pandas":           _pkg("pandas"),
+        "pyenchant": enchant.__version__,
+        "anyascii":  _pkg("anyascii"),
+        "pandas":    _pkg("pandas"),
     }
     run_meta = {
         "timestamp":      datetime.now().isoformat(timespec="seconds"),
