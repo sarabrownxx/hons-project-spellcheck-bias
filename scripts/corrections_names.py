@@ -104,6 +104,32 @@ def _pkg(name):
         return "unknown"
 
 
+def _build_name_lookup(df: pd.DataFrame) -> dict:
+    detail_cols = ["name", "top_country", "name_script",
+                   "ethnicolr_race", "langdetect_lang"]
+    use_cols = [c for c in detail_cols if c in df.columns]
+
+    sub = df[list({"name", "name_latin"} | set(use_cols))].dropna(subset=["name"]).copy()
+    name_arr  = sub["name"].values
+    nl_arr    = sub["name_latin"].values
+    row_dicts = sub[use_cols].to_dict("records")
+
+    lookup = {}
+
+    # latin entries first (lower priority — name match will overwrite)
+    for i, (n, nl) in enumerate(zip(name_arr, nl_arr)):
+        if nl and nl != n:
+            key = nl.lower()
+            if key not in lookup:
+                lookup[key] = {**row_dicts[i], "matched_via_latin": True}
+
+    # name entries (higher priority)
+    for i, n in enumerate(name_arr):
+        lookup[n.lower()] = {**row_dicts[i], "matched_via_latin": False}
+
+    return lookup
+
+
 def hunspell_corrections(unknowns, d):
     import enchant
     result = {}
@@ -177,7 +203,8 @@ def main():
         log.error("Missing columns: %s — run spellcheck_names.py first.", missing)
         sys.exit(1)
 
-    dataset_latin_set = set(df["name_latin"].str.lower().dropna())
+    name_lookup = _build_name_lookup(df)
+    log.info("  Name lookup built: %s entries", f"{len(name_lookup):,}")
     ideographic_words = set(
         df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), "name"].dropna().unique()
     )
@@ -234,8 +261,8 @@ def main():
         df["hunspell_orig_correction"]  = df["name"].map(h_corr_map)
         df["hunspell_latin_correction"] = df["name_latin"].map(h_corr_map)
         df.loc[ideographic_mask, "hunspell_orig_correction"] = None
-        df["hunspell_orig_correction_in_dataset"]  = df["hunspell_orig_correction"].str.lower().isin(dataset_latin_set)
-        df["hunspell_latin_correction_in_dataset"] = df["hunspell_latin_correction"].str.lower().isin(dataset_latin_set)
+        df["hunspell_orig_correction_match"]  = df["hunspell_orig_correction"].str.lower().map(name_lookup)
+        df["hunspell_latin_correction_match"] = df["hunspell_latin_correction"].str.lower().map(name_lookup)
 
         log.info("")
         log.info("[pyspellchecker corrections]")
@@ -251,8 +278,8 @@ def main():
         df["pysc_orig_correction"]  = df["name"].map(p_corr_map)
         df["pysc_latin_correction"] = df["name_latin"].map(p_corr_map)
         df.loc[ideographic_mask, "pysc_orig_correction"] = None
-        df["pysc_orig_correction_in_dataset"]  = df["pysc_orig_correction"].str.lower().isin(dataset_latin_set)
-        df["pysc_latin_correction_in_dataset"] = df["pysc_latin_correction"].str.lower().isin(dataset_latin_set)
+        df["pysc_orig_correction_match"]  = df["pysc_orig_correction"].str.lower().map(name_lookup)
+        df["pysc_latin_correction_match"] = df["pysc_latin_correction"].str.lower().map(name_lookup)
 
         log.info("Saving to %s…", OUTPUT_PATH)
         df.to_parquet(OUTPUT_PATH, index=False)
