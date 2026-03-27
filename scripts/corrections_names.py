@@ -6,13 +6,12 @@ by spellcheck_names.py. Must be run after that script has added the *_known
 columns to the parquet.
 
 Modes (--mode):
-  hunspell-chunk  Run hunspell on one chunk of unknowns; outputs a JSON
-                  correction map. Designed to run in parallel across chunks.
+  hunspell-chunk  Run hunspell suggest() on one chunk of unknowns; outputs a JSON
+                  correction map. Run in parallel across chunks in GitHub Actions.
                   Use with --chunk N --total-chunks M.
-  pysc            Loads all hunspell chunk JSON files, applies hunspell
-                  corrections to the df, then runs pyspellchecker.
-                  Use with --total-chunks M.
-  both            Run everything sequentially in one process (local use).
+  merge           Load all chunk JSON files, apply corrections to the parquet, save
+                  data/hunspell_results.parquet. Use with --total-chunks M.
+  both            Run chunk then merge in a single process (local use).
 """
 
 import argparse
@@ -28,10 +27,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import pandas as pd
-from spellchecker import SpellChecker
+from corrections_utils import build_name_lookup
 
 LOGS_DIR = Path("logs")
-OUTPUT_PATH = Path("data/advanced_results_base.parquet")
+OUTPUT_PATH = Path("data/hunspell_results.parquet")
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
 
 
@@ -104,32 +103,6 @@ def _pkg(name):
         return "unknown"
 
 
-def _build_name_lookup(df: pd.DataFrame) -> dict:
-    detail_cols = ["name", "top_country", "name_script",
-                   "ethnicolr_race", "langdetect_lang"]
-    use_cols = [c for c in detail_cols if c in df.columns]
-
-    sub = df[list({"name", "name_latin"} | set(use_cols))].dropna(subset=["name"]).copy()
-    name_arr  = sub["name"].values
-    nl_arr    = sub["name_latin"].values
-    row_dicts = sub[use_cols].to_dict("records")
-
-    lookup = {}
-
-    # latin entries first (lower priority — name match will overwrite)
-    for i, (n, nl) in enumerate(zip(name_arr, nl_arr)):
-        if nl and nl != n:
-            key = nl.lower()
-            if key not in lookup:
-                lookup[key] = {**row_dicts[i], "matched_via_latin": True}
-
-    # name entries (higher priority)
-    for i, n in enumerate(name_arr):
-        lookup[n.lower()] = {**row_dicts[i], "matched_via_latin": False}
-
-    return lookup
-
-
 def hunspell_corrections(unknowns, d):
     import enchant
     result = {}
@@ -151,25 +124,9 @@ def hunspell_corrections(unknowns, d):
     return result
 
 
-def pysc_corrections(unknowns, spell):
-    result = {}
-    total = len(unknowns)
-    t0 = time.time()
-    for i, w in enumerate(unknowns):
-        if w:
-            result[w] = spell.correction(w)
-        if (i + 1) % 50_000 == 0:
-            log.info("    pysc corrections: %s / %s (%.0f%%)  %.0fs elapsed",
-                     f"{i+1:,}", f"{total:,}", 100 * (i + 1) / total,
-                     time.time() - t0)
-    log.info("    pysc corrections done — %s words  (%.0fs)",
-             f"{total:,}", time.time() - t0)
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["hunspell-chunk", "pysc", "both"],
+    parser.add_argument("--mode", choices=["hunspell-chunk", "merge", "both"],
                         default="both")
     parser.add_argument("--chunk", type=int, default=0,
                         help="0-indexed chunk number (hunspell-chunk mode)")
@@ -186,24 +143,19 @@ def main():
     log.info("corrections_names.py  mode=%s  chunk=%s/%s  —  %s",
              mode, args.chunk, args.total_chunks, timestamp)
     log.info("=" * 70)
-    log.info("pyspellchecker %s", _pkg("pyspellchecker"))
 
     parquet_path = _find_parquet()
     log.info("Loading %s…", parquet_path)
     df = pd.read_parquet(parquet_path)
     log.info("  %s names loaded", f"{len(df):,}")
 
-    required = [
-        "hunspell_orig_known", "hunspell_latin_known",
-        "pysc_orig_known", "pysc_latin_known",
-        "name_script", "name_latin",
-    ]
+    required = ["hunspell_orig_known", "hunspell_latin_known", "name_script", "name_latin"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         log.error("Missing columns: %s — run spellcheck_names.py first.", missing)
         sys.exit(1)
 
-    name_lookup = _build_name_lookup(df)
+    name_lookup = build_name_lookup(df)
     log.info("  Name lookup built: %s entries", f"{len(name_lookup):,}")
     ideographic_words = set(
         df.loc[df["name_script"].isin(IDEOGRAPHIC_SCRIPTS), "name"].dropna().unique()
@@ -249,9 +201,8 @@ def main():
             log.info("Done.  Log: %s", log_path)
             return
 
-    # ── pysc / both: apply hunspell corrections then run pyspellchecker ────────
-    if mode in ("pysc", "both"):
-        if mode == "pysc":
+    if mode in ("merge", "both"):
+        if mode == "merge":
             log.info("")
             log.info("[loading hunspell corrections from %d chunk(s)]",
                      args.total_chunks)
@@ -264,24 +215,8 @@ def main():
         df["hunspell_orig_correction_match"]  = df["hunspell_orig_correction"].str.lower().map(name_lookup)
         df["hunspell_latin_correction_match"] = df["hunspell_latin_correction"].str.lower().map(name_lookup)
 
-        log.info("")
-        log.info("[pyspellchecker corrections]")
-        spell_pysc = SpellChecker()
-        p_unknowns = (
-            set(df.loc[~df["pysc_orig_known"],  "name"].dropna().unique()) |
-            set(df.loc[~df["pysc_latin_known"], "name_latin"].dropna().unique())
-        ) - ideographic_words
-        log.info("  %s unique unknowns (combined A+B, ideographic excluded)",
-                 f"{len(p_unknowns):,}")
-        p_corr_map = pysc_corrections(p_unknowns, spell_pysc)
-
-        df["pysc_orig_correction"]  = df["name"].map(p_corr_map)
-        df["pysc_latin_correction"] = df["name_latin"].map(p_corr_map)
-        df.loc[ideographic_mask, "pysc_orig_correction"] = None
-        df["pysc_orig_correction_match"]  = df["pysc_orig_correction"].str.lower().map(name_lookup)
-        df["pysc_latin_correction_match"] = df["pysc_latin_correction"].str.lower().map(name_lookup)
-
         log.info("Saving to %s…", OUTPUT_PATH)
+        OUTPUT_PATH.parent.mkdir(exist_ok=True)
         df.to_parquet(OUTPUT_PATH, index=False)
 
     log.info("Done.  Log: %s", log_path)

@@ -23,12 +23,12 @@ Language mode (--lt-language):
           Output: data/final_results_langall.parquet
 
 New columns added (prefix = lt_ or lt_auto_ depending on --lt-language):
-  {p}orig_known                 — bool, Condition A (original name)
-  {p}latin_known                — bool, Condition B (latinised name)
-  {p}orig_correction            — str | None, top suggestion for unknowns
-  {p}latin_correction           — str | None, top suggestion for unknowns
-  {p}orig_correction_in_dataset — bool, whether correction appears in name corpus
-  {p}latin_correction_in_dataset— bool, whether correction appears in name corpus
+  {p}orig_known            — bool, Condition A (original name)
+  {p}latin_known           — bool, Condition B (latinised name)
+  {p}orig_correction       — str | None, top suggestion for unknowns
+  {p}latin_correction      — str | None, top suggestion for unknowns
+  {p}orig_correction_match — dict | None, match details if correction is a dataset name
+  {p}latin_correction_match— dict | None
 
 Notes:
   - LanguageTool is case-sensitive. Names are passed to LT as-is (not lowercased),
@@ -67,6 +67,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import pandas as pd
+from corrections_utils import build_name_lookup
 
 LOGS_DIR = Path("logs")
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
@@ -74,8 +75,8 @@ IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
 
 def _output_path(lt_language: str) -> Path:
     if lt_language == "auto":
-        return Path("data/final_results_langall.parquet")
-    return Path("data/final_results.parquet")
+        return Path("data/lt_auto_results.parquet")
+    return Path("data/lt_results.parquet")
 
 
 def _chunk_path_for(chunk: int, lt_language: str) -> Path:
@@ -272,7 +273,7 @@ def run_merge(df: pd.DataFrame, total_chunks: int, lt_language: str = "en-US") -
     log.info("  Combined: %s known entries, %s corrections",
              f"{len(combined_known_map):,}", f"{len(combined_correction_map):,}")
 
-    dataset_latin_set = set(df["name_latin"].str.lower().dropna())
+    name_lookup = build_name_lookup(df)
     ideographic_mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
 
     log.info("")
@@ -288,12 +289,8 @@ def run_merge(df: pd.DataFrame, total_chunks: int, lt_language: str = "en-US") -
     df[f"{p_col}latin_correction"] = df["name_latin"].map(combined_correction_map)
     df.loc[df[f"{p_col}latin_known"], f"{p_col}latin_correction"] = None
 
-    df[f"{p_col}orig_correction_in_dataset"] = (
-        df[f"{p_col}orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
-    )
-    df[f"{p_col}latin_correction_in_dataset"] = (
-        df[f"{p_col}latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
-    )
+    df[f"{p_col}orig_correction_match"]  = df[f"{p_col}orig_correction"].str.lower().map(name_lookup)
+    df[f"{p_col}latin_correction_match"] = df[f"{p_col}latin_correction"].str.lower().map(name_lookup)
 
     pct_orig = 100 * df[f"{p_col}orig_known"].sum() / len(df)
     pct_latin = 100 * df[f"{p_col}latin_known"].sum() / len(df)

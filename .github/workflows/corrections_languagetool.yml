@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: 'Run ID of the Corrections — SymSpell workflow (names-intermediate artifact)'
+        description: 'Run ID of the main pipeline (names-enriched artifact)'
         required: true
         type: string
       lt_language:
@@ -46,8 +46,8 @@ jobs:
       - name: Download enriched dataset from main pipeline
         uses: actions/download-artifact@v4
         with:
-          name: names-intermediate-${{ inputs.source_run_id }}
-          path: data/
+          name: names-enriched-${{ inputs.source_run_id }}
+          path: .
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
@@ -106,8 +106,8 @@ jobs:
       - name: Download enriched dataset from main pipeline
         uses: actions/download-artifact@v4
         with:
-          name: names-intermediate-${{ inputs.source_run_id }}
-          path: data/
+          name: names-enriched-${{ inputs.source_run_id }}
+          path: .
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
@@ -154,12 +154,12 @@ jobs:
             --total-chunks 4 \
             --lt-language ${{ inputs.lt_language }}
 
-      - name: Upload final dataset
+      - name: Upload LT results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: names-final-${{ github.run_id }}
-          path: data/${{ inputs.lt_language == 'auto' && 'final_results_langall' || 'final_results' }}.parquet
+          name: names-lt-${{ github.run_id }}
+          path: data/${{ inputs.lt_language == 'auto' && 'lt_auto_results' || 'lt_results' }}.parquet
           retention-days: 90
 
       - name: Upload logs

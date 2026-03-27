@@ -10,33 +10,26 @@ data/names_results_base.parquet so corrections_languagetool.py can find it
 via the standard _find_parquet() lookup.
 
 New columns added:
-  hunspell_orig_correction              — str | None, top hunspell suggestion
-  hunspell_latin_correction             — str | None
-  hunspell_orig_correction_in_dataset   — bool
-  hunspell_latin_correction_in_dataset  — bool
-  symspell_orig_known                   — bool, Condition A (original name)
-  symspell_latin_known                  — bool, Condition B (latinised name)
-  symspell_orig_correction              — str | None, top SymSpell suggestion
-  symspell_latin_correction             — str | None
-  symspell_orig_correction_in_dataset   — bool
-  symspell_latin_correction_in_dataset  — bool
+  symspell_orig_known            — bool, Condition A (original name)
+  symspell_latin_known           — bool, Condition B (latinised name)
+  symspell_orig_correction       — str | None, top SymSpell suggestion
+  symspell_latin_correction      — str | None
+  symspell_orig_correction_match — dict | None
+  symspell_latin_correction_match— dict | None
 
 Notes:
-  - Hunspell chunk JSONs are loaded from data/hunspell_corrections_chunk_N.json.
-    Use --hunspell-chunks 0 to skip the hunspell merge step (e.g. local testing).
   - SymSpell lookups use lowercased words (frequency dict is all-lowercase).
   - Ideographic-script rows (CJK, Hangul, Hiragana, Katakana) are excluded from
     Condition A corrections; *_orig_correction is None for these rows.
 
 Usage:
-  python scripts/corrections_symspell.py [--hunspell-chunks N] [--workers N]
+  python scripts/corrections_symspell.py [--workers N]
 """
 
 import argparse
 import concurrent.futures
 import importlib.metadata
 import importlib.resources
-import json
 import logging
 import sys
 import time
@@ -49,25 +42,11 @@ load_dotenv()
 
 import pandas as pd
 from symspellpy import SymSpell, Verbosity
+from corrections_utils import build_name_lookup
 
 LOGS_DIR = Path("logs")
-OUTPUT_PATH = Path("data/names_results_base.parquet")
+OUTPUT_PATH = Path("data/symspell_results.parquet")
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
-
-
-def _load_hunspell_chunks(total_chunks: int) -> dict:
-    """Merge all hunspell correction chunk JSONs into one {word: correction} map."""
-    combined = {}
-    for i in range(total_chunks):
-        p = Path(f"data/hunspell_corrections_chunk_{i}.json")
-        if p.exists():
-            with open(p, encoding="utf-8") as f:
-                combined.update(json.load(f))
-            log.info("  Loaded hunspell chunk %d: running total %s corrections",
-                     i, f"{len(combined):,}")
-        else:
-            log.warning("  Hunspell chunk %d not found at %s — skipping.", i, p)
-    return combined
 
 
 def _find_parquet() -> Path:
@@ -193,8 +172,6 @@ def symspell_corrections(unknowns: list, sym: SymSpell, workers: int) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hunspell-chunks", type=int, default=2,
-                        help="Number of hunspell chunk JSONs to merge (0 to skip)")
     parser.add_argument("--workers", type=int, default=1,
                         help="Number of worker processes for corrections (default 1)")
     args = parser.parse_args()
@@ -207,7 +184,7 @@ def main():
     log.info("corrections_symspell.py  —  %s", timestamp)
     log.info("=" * 70)
     log.info("symspellpy %s", _pkg("symspellpy"))
-    log.info("hunspell-chunks=%d  workers=%d", args.hunspell_chunks, args.workers)
+    log.info("workers=%d", args.workers)
 
     parquet_path = _find_parquet()
     log.info("Loading %s…", parquet_path)
@@ -220,34 +197,12 @@ def main():
         log.error("Missing columns: %s — run spellcheck_names.py first.", missing)
         sys.exit(1)
 
-    dataset_latin_set = set(df["name_latin"].str.lower().dropna())
+    name_lookup = build_name_lookup(df)
+    log.info("  Name lookup built: %s entries", f"{len(name_lookup):,}")
     ideographic_mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
 
-    # ── Hunspell corrections merge ────────────────────────────────────────────
-    if args.hunspell_chunks > 0:
-        log.info("")
-        log.info("[merging hunspell corrections from %d chunk(s)]", args.hunspell_chunks)
-        h_corr_map = _load_hunspell_chunks(args.hunspell_chunks)
-        log.info("  %s total hunspell corrections loaded", f"{len(h_corr_map):,}")
-
-        df["hunspell_orig_correction"] = df["name"].map(h_corr_map)
-        df["hunspell_latin_correction"] = df["name_latin"].map(h_corr_map)
-        df.loc[ideographic_mask, "hunspell_orig_correction"] = None
-        df["hunspell_orig_correction_in_dataset"] = (
-            df["hunspell_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
-        )
-        df["hunspell_latin_correction_in_dataset"] = (
-            df["hunspell_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
-        )
-        log.info("  Orig  corrections: %s",
-                 f"{df['hunspell_orig_correction'].notna().sum():,}")
-        log.info("  Latin corrections: %s",
-                 f"{df['hunspell_latin_correction'].notna().sum():,}")
-    else:
-        log.info("")
-        log.info("[skipping hunspell merge (--hunspell-chunks 0)]")
-
-    # ── Load SymSpell ─────────────────────────────────────────────────────────
+    log.info("")
+    log.info("[loading SymSpell frequency dictionary]")
     log.info("")
     log.info("[loading SymSpell frequency dictionary]")
     t0 = time.time()
@@ -303,12 +258,8 @@ def main():
     df["symspell_latin_correction"] = df["name_latin"].str.lower().map(corr_map)
     df.loc[df["symspell_latin_known"], "symspell_latin_correction"] = None
 
-    df["symspell_orig_correction_in_dataset"] = (
-        df["symspell_orig_correction"].fillna("").str.lower().isin(dataset_latin_set)
-    )
-    df["symspell_latin_correction_in_dataset"] = (
-        df["symspell_latin_correction"].fillna("").str.lower().isin(dataset_latin_set)
-    )
+    df["symspell_orig_correction_match"]  = df["symspell_orig_correction"].str.lower().map(name_lookup)
+    df["symspell_latin_correction_match"] = df["symspell_latin_correction"].str.lower().map(name_lookup)
 
     n_orig_corr = df["symspell_orig_correction"].notna().sum()
     n_latin_corr = df["symspell_latin_correction"].notna().sum()

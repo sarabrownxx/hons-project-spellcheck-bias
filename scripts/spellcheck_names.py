@@ -24,16 +24,10 @@ Spell-checkers used
               behind LibreOffice, Firefox, macOS, and Chrome.  Real-world
               impact: this is what users actually encounter.
 
-  pyspellchecker  (Norvig edit-distance + English frequency dict) — secondary
-              baseline.  Algorithmically simpler; useful for comparison and
-              as a sanity check on the hunspell findings.
-
 New columns added
 ─────────────────
   hunspell_orig_known   hunspell: original name recognised (en_US)
   hunspell_latin_known  hunspell: name_latin recognised
-  pysc_orig_known       pyspellchecker: original name recognised
-  pysc_latin_known      pyspellchecker: name_latin recognised
 
 Correction suggestions are computed separately by corrections_names.py,
 which must be run after this script.
@@ -62,7 +56,6 @@ load_dotenv()
 
 import pandas as pd
 import enchant
-from spellchecker import SpellChecker
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
@@ -145,32 +138,6 @@ def hunspell_corrections(unknowns: set, d: enchant.Dict) -> dict:
     return result
 
 
-def pysc_batch_known(words: list, spell: SpellChecker) -> set:
-    """Return the subset of words that pyspellchecker considers known."""
-    log.info("    pysc check: spell.known() on %s words…", f"{len(words):,}")
-    t0 = time.time()
-    result = spell.known(words)
-    log.info("    pysc check done — %s known  (%.0fs)", f"{len(result):,}", time.time() - t0)
-    return result
-
-
-def pysc_corrections(unknowns: set, spell: SpellChecker) -> dict:
-    """Return {word: correction_or_None} for each unknown word."""
-    result = {}
-    total = len(unknowns)
-    t0 = time.time()
-    for i, w in enumerate(unknowns):
-        if w:
-            result[w] = spell.correction(w)
-        if (i + 1) % 50_000 == 0:
-            log.info("    pysc corrections: %s / %s (%.0f%%)  %.0fs elapsed",
-                     f"{i+1:,}", f"{total:,}", 100 * (i + 1) / total,
-                     time.time() - t0)
-    log.info("    pysc corrections done — %s words  (%.0fs)",
-             f"{total:,}", time.time() - t0)
-    return result
-
-
 # ── Core check runner ──────────────────────────────────────────────────────────
 
 def run_checker(df: pd.DataFrame,
@@ -199,22 +166,10 @@ def run_checker(df: pd.DataFrame,
 # ── Run all checkers ───────────────────────────────────────────────────────────
 
 def run_all_checkers(df: pd.DataFrame) -> tuple:
-    """
-    Runs hunspell and pyspellchecker known/unknown check under both conditions.
-
-    Pre-computes each tool on the union of unique words across both conditions
-    so that pure ASCII Latin names (where name == name_latin) are only checked
-    once.  Returns the enriched DataFrame and a stats dict.
-
-    Correction suggestions are not computed here — run corrections_names.py
-    separately once this pipeline has completed.
-    """
     t0 = time.time()
 
     d_hunspell = enchant.Dict("en_US")
-    spell_pysc  = SpellChecker()
 
-    # Build word sets for each condition and their union.
     cond_a_words = set(df["name"].dropna().unique())
     cond_b_words = set(df["name_latin"].dropna().unique())
     all_words    = list(cond_a_words | cond_b_words)
@@ -225,7 +180,6 @@ def run_all_checkers(df: pd.DataFrame) -> tuple:
              f"{len(cond_a_words):,}", f"{len(cond_b_words):,}",
              f"{len(all_words):,}", f"{len(overlap):,}")
 
-    # ── hunspell — check once on the combined word set ────────────────────────
     log.info("")
     log.info("Pre-computing hunspell over %s combined unique words…",
              f"{len(all_words):,}")
@@ -239,52 +193,26 @@ def run_all_checkers(df: pd.DataFrame) -> tuple:
     log.info("[hunspell — Condition B] name_latin")
     df = run_checker(df, "name_latin", lambda _: h_known, "hunspell_latin")
 
-    log.info("Checkpoint: saving after hunspell…")
-    df.to_parquet(PARQUET_PATH, index=False)
-    log.info("Checkpoint saved.")
-
-    # ── pyspellchecker — check once on the combined word set ──────────────────
-    log.info("")
-    log.info("Pre-computing pyspellchecker over %s combined unique words…",
-             f"{len(all_words):,}")
-    p_known = pysc_batch_known(all_words, spell_pysc)
-    log.info("  pysc: %s known  %s unknown",
-             f"{len(p_known):,}", f"{len(all_words) - len(p_known):,}")
-
-    log.info("[pyspellchecker — Condition A] original names")
-    df = run_checker(df, "name", lambda _: p_known, "pysc_orig")
-
-    log.info("[pyspellchecker — Condition B] name_latin")
-    df = run_checker(df, "name_latin", lambda _: p_known, "pysc_latin")
-
     duration = time.time() - t0
     log.info("All checkers complete in %.0fs", duration)
 
-    # ── Summary stats ─────────────────────────────────────────────────────────
     def pct(col): return round(100 * df[col].mean(), 2)
 
     stats = {
         "duration_s": round(duration, 1),
         "n_total":    len(df),
         "hunspell": {
-            "version":        enchant.__version__,
-            "dictionary":     "en_US",
-            "pct_orig_known": pct("hunspell_orig_known"),
+            "version":         enchant.__version__,
+            "dictionary":      "en_US",
+            "pct_orig_known":  pct("hunspell_orig_known"),
             "pct_latin_known": pct("hunspell_latin_known"),
-        },
-        "pysc": {
-            "version":        _pkg("pyspellchecker"),
-            "language":       "en",
-            "pct_orig_known": pct("pysc_orig_known"),
-            "pct_latin_known": pct("pysc_latin_known"),
         },
         "script_breakdown":  _script_breakdown(df),
         "country_breakdown": _country_breakdown(df),
     }
 
-    for tool, s in [("hunspell", stats["hunspell"]), ("pysc", stats["pysc"])]:
-        log.info("  %-18s orig known: %.1f%%  latin known: %.1f%%",
-                 tool, s["pct_orig_known"], s["pct_latin_known"])
+    log.info("  hunspell  orig known: %.1f%%  latin known: %.1f%%",
+             stats["hunspell"]["pct_orig_known"], stats["hunspell"]["pct_latin_known"])
 
     return df, stats
 

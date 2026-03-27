@@ -1,0 +1,86 @@
+name: Corrections — Merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      hunspell_run_id:
+        description: 'Run ID of the Corrections — Hunspell workflow'
+        required: true
+        type: string
+      symspell_run_id:
+        description: 'Run ID of the Corrections — SymSpell workflow'
+        required: true
+        type: string
+      lt_run_id:
+        description: 'Run ID of the Corrections — LanguageTool workflow'
+        required: true
+        type: string
+      lt_language:
+        description: "LT language used ('en-US' or 'auto') — must match what LT workflow used"
+        required: false
+        default: 'en-US'
+        type: string
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p data logs
+
+      - name: Download hunspell results
+        uses: actions/download-artifact@v4
+        with:
+          name: names-hunspell-${{ inputs.hunspell_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.hunspell_run_id }}
+
+      - name: Download symspell results
+        uses: actions/download-artifact@v4
+        with:
+          name: names-symspell-${{ inputs.symspell_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.symspell_run_id }}
+
+      - name: Download LT results
+        uses: actions/download-artifact@v4
+        with:
+          name: names-lt-${{ inputs.lt_run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.lt_run_id }}
+
+      - name: Merge all tool results
+        run: python scripts/corrections_merge.py --lt-language ${{ inputs.lt_language }}
+
+      - name: Upload final results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: names-final-${{ github.run_id }}
+          path: data/${{ inputs.lt_language == 'auto' && 'final_results_langall' || 'final_results' }}.parquet
+          retention-days: 90
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-merge-${{ github.run_id }}
+          path: logs/
+          retention-days: 90

@@ -159,20 +159,26 @@ has been run.
 
 ### 4.5 Correction columns (corrections_names.py → `advanced_results_base.parquet`)
 
-Computed separately because hunspell's `suggest()` call is ~0.025 s/word — too slow to run inline. Two checkers × two conditions × (correction + in_dataset) = 8 columns.
+Three checkers (hunspell, symspell, lt) × two conditions (orig, latin) = 6 correction string columns + 6 match detail columns.
+
+Correction string columns hold the top suggestion returned by the tool, or None if the name was known / no suggestion / ideographic script (Condition A only). Match detail columns hold None if there was no correction or the correction does not match any name in the dataset, otherwise a dict of that matched name's characteristics.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `hunspell_orig_correction` | str\|None | hunspell: top suggestion for original name; None if known, no match, or ideographic script |
-| `hunspell_latin_correction` | str\|None | hunspell: top suggestion for name_latin |
-| `hunspell_orig_correction_in_dataset` | bool | True if Condition A correction matches any name in the dataset (case-insensitive, matched against name_latin) |
-| `hunspell_latin_correction_in_dataset` | bool | True if Condition B correction matches any dataset name |
-| `pysc_orig_correction` | str\|None | pyspellchecker: top correction for original name |
-| `pysc_latin_correction` | str\|None | pyspellchecker: top correction for name_latin |
-| `pysc_orig_correction_in_dataset` | bool | True if Condition A pysc correction matches a dataset name |
-| `pysc_latin_correction_in_dataset` | bool | True if Condition B pysc correction matches a dataset name |
+| `hunspell_orig_correction` | str\|None | top hunspell suggestion for original name |
+| `hunspell_latin_correction` | str\|None | top hunspell suggestion for name_latin |
+| `hunspell_orig_correction_match` | dict\|None | match details if correction is a dataset name |
+| `hunspell_latin_correction_match` | dict\|None | match details if correction is a dataset name |
+| `symspell_orig_correction` | str\|None | top symspell suggestion for original name |
+| `symspell_latin_correction` | str\|None | top symspell suggestion for name_latin |
+| `symspell_orig_correction_match` | dict\|None | match details if correction is a dataset name |
+| `symspell_latin_correction_match` | dict\|None | match details if correction is a dataset name |
+| `lt_orig_correction` | str\|None | top languagetool suggestion for original name |
+| `lt_latin_correction` | str\|None | top languagetool suggestion for name_latin |
+| `lt_orig_correction_match` | dict\|None | match details if correction is a dataset name |
+| `lt_latin_correction_match` | dict\|None | match details if correction is a dataset name |
 
-The `*_correction_in_dataset` flag is analytically interesting: if a spell-checker "corrects" a non-Western name and the corrected form also exists in the dataset, it may indicate the tool is nudging the name towards a more Western/common alternative.
+Match dict fields: `name`, `top_country`, `name_script`, `ethnicolr_race`, `langdetect_lang`, `matched_via_latin`. The `matched_via_latin` bool is True when the correction matched via the name_latin transliteration of a dataset entry rather than its original form. Lookup is case-insensitive throughout. Name-form matches take priority over latin-form matches for the same key.
 
 ---
 

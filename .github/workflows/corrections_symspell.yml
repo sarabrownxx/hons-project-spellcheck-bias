@@ -7,10 +7,6 @@ on:
         description: 'Run ID of the main pipeline (names-enriched artifact)'
         required: true
         type: string
-      hunspell_run_id:
-        description: 'Run ID of the Corrections — Hunspell workflow (chunk JSON artifacts)'
-        required: true
-        type: string
 
 jobs:
   symspell-corrections:
@@ -37,37 +33,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: names-enriched-${{ inputs.source_run_id }}
-          path: data/
+          path: .
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
-      - name: Download hunspell chunk 0
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: hunspell-chunk-0-${{ inputs.hunspell_run_id }}
-          path: data/
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ inputs.hunspell_run_id }}
+      - name: Run SymSpell corrections
+        run: python scripts/corrections_symspell.py --workers 2
 
-      - name: Download hunspell chunk 1
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: hunspell-chunk-1-${{ inputs.hunspell_run_id }}
-          path: data/
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ inputs.hunspell_run_id }}
-
-      - name: Run hunspell merge + SymSpell corrections
-        run: python scripts/corrections_symspell.py --hunspell-chunks 2 --workers 2
-
-      - name: Upload intermediate dataset
+      - name: Upload symspell results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: names-intermediate-${{ github.run_id }}
-          path: data/names_results_base.parquet
+          name: names-symspell-${{ github.run_id }}
+          path: data/symspell_results.parquet
           retention-days: 90
 
       - name: Upload logs

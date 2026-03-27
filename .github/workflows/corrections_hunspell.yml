@@ -65,3 +65,70 @@ jobs:
           name: correction-hunspell-logs-${{ matrix.chunk }}-${{ github.run_id }}
           path: logs/
           retention-days: 90
+
+  hunspell-merge:
+    needs: hunspell-corrections
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p data logs
+
+      - name: Download enriched dataset from main pipeline
+        uses: actions/download-artifact@v4
+        with:
+          name: names-enriched-${{ inputs.source_run_id }}
+          path: .
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Download chunk 0 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: hunspell-chunk-0-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Download chunk 1 JSON
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: hunspell-chunk-1-${{ github.run_id }}
+          path: data/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
+
+      - name: Merge chunks and save hunspell_results.parquet
+        run: python scripts/corrections_names.py --mode merge --total-chunks 2
+
+      - name: Upload hunspell results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: names-hunspell-${{ github.run_id }}
+          path: data/hunspell_results.parquet
+          retention-days: 90
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: correction-hunspell-merge-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
