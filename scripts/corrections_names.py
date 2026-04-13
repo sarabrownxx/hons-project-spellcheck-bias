@@ -162,7 +162,7 @@ def main():
     )
     ideographic_mask = df["name_script"].isin(IDEOGRAPHIC_SCRIPTS)
 
-    # ── hunspell-chunk: compute corrections for one chunk of unknowns ──────────
+    # hunspell-chunk: compute corrections for one chunk of unknowns
     if mode in ("hunspell-chunk", "both"):
         import enchant
         log.info("pyenchant %s", enchant.__version__)

@@ -32,8 +32,7 @@ load_dotenv()
 import pandas as pd
 from anyascii import anyascii
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-
+# Configuration
 PARQUET_PATH = Path("data/names_base.parquet")
 
 # Maps the first word of unicodedata.name() to a clean script label.
@@ -83,7 +82,7 @@ def main():
 
     elapsed = time.time() - t0
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # Summary
     dist = df["name_script"].value_counts()
     n_already_latin = int((df["name"] == df["name_latin"]).sum())
 
@@ -94,7 +93,7 @@ def main():
     print(f"\nAlready Latin (name == name_latin): "
           f"{n_already_latin:,} ({100 * n_already_latin / len(df):.1f}%)")
 
-    # ── Save ──────────────────────────────────────────────────────────────────
+    # Save
     print(f"\nSaving to {PARQUET_PATH}…", flush=True)
     df.to_parquet(PARQUET_PATH, index=False)
     print("Done.")

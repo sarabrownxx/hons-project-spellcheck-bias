@@ -21,7 +21,7 @@ import re
 import unicodedata
 import enchant
 
-# ── Sample names ──────────────────────────────────────────────────────────────
+# Sample names
 # Hand-picked to cover different scripts and origins.
 # (name, description)
 SAMPLE = [
@@ -51,7 +51,7 @@ SAMPLE = [
     ("A A",         "All single-char parts — already filtered at build time"),
 ]
 
-# ── Sentence templates ─────────────────────────────────────────────────────────
+# Sentence templates
 def make_sentences(name: str) -> dict:
     return {
         "standalone":   name,
@@ -60,7 +60,7 @@ def make_sentences(name: str) -> dict:
         "sentence_mid": f"My name is {name} and that is a fact",
     }
 
-# ── Name cleaner filter ────────────────────────────────────────────────────────
+# Name cleaner filter
 _ALLOWED_NON_LETTER = set("-' ")   # hyphen, apostrophe, space (for multiword)
 
 def is_clean(name: str) -> bool:
@@ -81,8 +81,7 @@ def is_clean(name: str) -> bool:
         return False  # digit, punctuation, symbol, etc.
     return True
 
-# ── Hunspell checkers ─────────────────────────────────────────────────────────
-
+# Hunspell checkers
 def check_word(word: str, d: enchant.Dict) -> dict:
     """Check a single word string directly — the baseline."""
     try:
@@ -130,7 +129,7 @@ def check_tokens(sentence: str, d: enchant.Dict) -> list:
     return results
 
 
-# ── Pretty printer ────────────────────────────────────────────────────────────
+# Pretty printer
 def print_name_results(name: str, desc: str, d: enchant.Dict, clean: bool):
     print(f"\n{'='*70}")
     print(f"  Name: {name!r}  ({desc})")
@@ -143,7 +142,7 @@ def print_name_results(name: str, desc: str, d: enchant.Dict, clean: bool):
 
     sentences = make_sentences(name)
 
-    # ── Approach A: pass the full sentence string directly to hunspell ─────────
+    # Approach A: pass the full sentence string directly to hunspell
     print("\n  APPROACH A — full sentence string passed directly to d.check() / d.suggest()")
     print("  (hunspell treats the whole string as one word)")
     for fmt, sentence in sentences.items():
@@ -152,7 +151,7 @@ def print_name_results(name: str, desc: str, d: enchant.Dict, clean: bool):
         sugg_str = f"  → {r['suggestions']}" if not r["known"] else ""
         print(f"    {status}  {sentence!r}{sugg_str}")
 
-    # ── Approach B: split into tokens, check each individually ────────────────
+    # Approach B: split into tokens, check each individually
     print("\n  APPROACH B — sentence split into tokens, each checked separately")
     print("  (shows that the name token result == standalone result)")
     for fmt, sentence in sentences.items():
@@ -164,7 +163,7 @@ def print_name_results(name: str, desc: str, d: enchant.Dict, clean: bool):
         ) if flagged else "all tokens known"
         print(f"    [{fmt}]  flagged: {flagged_str}")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main
 def main():
     print("Initialising hunspell en_US…")
     d = enchant.Dict("en_US")

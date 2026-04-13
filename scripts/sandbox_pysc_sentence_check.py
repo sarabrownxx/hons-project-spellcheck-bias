@@ -21,7 +21,7 @@ Also checks:
 
 from spellchecker import SpellChecker
 
-# ── 5 representative names ─────────────────────────────────────────────────────
+# 5 representative names
 # Chosen to span Western-known, non-Western Latin, hyphenated, and
 # a common English word that is also a name (Grace).
 NAMES = [
@@ -32,7 +32,7 @@ NAMES = [
     ("Oluwaseun", "Latin — Nigerian/Yoruba origin (likely unknown)"),
 ]
 
-# ── Sentence templates ─────────────────────────────────────────────────────────
+# Sentence templates
 def make_sentences(name: str) -> dict:
     return {
         "standalone":     name,
@@ -42,8 +42,7 @@ def make_sentences(name: str) -> dict:
     }
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
+# Helpers
 def extract_name_token(sentence: str, name: str) -> str:
     """Return the token from the sentence that matches the name (case-insensitive)."""
     for tok in sentence.split():
@@ -86,8 +85,7 @@ def check_whole_sentence(sentence: str, spell: SpellChecker) -> dict:
     }
 
 
-# ── Pretty printer ─────────────────────────────────────────────────────────────
-
+# Pretty printer
 def print_name_results(name: str, desc: str, spell: SpellChecker):
     print(f"\n{'='*72}")
     print(f"  Name: {name!r}  ({desc})")
@@ -95,7 +93,7 @@ def print_name_results(name: str, desc: str, spell: SpellChecker):
 
     sentences = make_sentences(name)
 
-    # ── Approach A: whole sentence passed as one 'word' ────────────────────────
+    # Approach A: whole sentence passed as one 'word'
     print("\n  APPROACH A — full sentence string passed as a single token to pysc")
     print("  (pysc treats multi-word string as one unknown word)")
     for fmt, sentence in sentences.items():
@@ -105,7 +103,7 @@ def print_name_results(name: str, desc: str, spell: SpellChecker):
         if not r["known"]:
             print(f"         correction={r['correction']!r}  candidates={r['candidates']}")
 
-    # ── Approach B: extract name token from each sentence, check it ───────────
+    # Approach B: extract name token from each sentence, check it
     print("\n  APPROACH B — name token extracted from sentence, checked individually")
     print("  (expected: identical result regardless of sentence position)")
     results_by_fmt = {}
@@ -124,7 +122,7 @@ def print_name_results(name: str, desc: str, spell: SpellChecker):
         status = "known  " if r["known"] else f"UNKNOWN  → correction={r['correction']!r}  candidates={r['candidates']}"
         print(f"    [{fmt:<16}]  token={r['token']!r}  {status}{diff_flag}")
 
-    # ── Capitalisation sensitivity check ──────────────────────────────────────
+    # Capitalisation sensitivity check
     print("\n  CAPITALISATION CHECK — lower / title / upper variants of the name token")
     for variant in (name.lower(), name.title(), name.upper()):
         r = check_token(variant, spell)
@@ -132,8 +130,7 @@ def print_name_results(name: str, desc: str, spell: SpellChecker):
         print(f"    {variant!r:<20}  {status}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
+# Main
 def main():
     print("Initialising pyspellchecker (en)…")
     spell = SpellChecker()

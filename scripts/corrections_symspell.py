@@ -209,7 +209,7 @@ def main():
     sym = _load_symspell()
     log.info("  Loaded %s entries  (%.1fs)", f"{len(sym._words):,}", time.time() - t0)
 
-    # ── Condition A: known check (original name) ──────────────────────────────
+    # Condition A: known check (original name)
     log.info("")
     log.info("[Condition A — original name]")
     names_a = df["name"].dropna().unique()
@@ -219,7 +219,7 @@ def main():
     log.info("  %s / %s known  (%.1f%%)",
              f"{df['symspell_orig_known'].sum():,}", f"{len(df):,}", pct_a)
 
-    # ── Condition B: known check (latinised name) ─────────────────────────────
+    # Condition B: known check (latinised name)
     log.info("")
     log.info("[Condition B — latinised name]")
     names_b = df["name_latin"].dropna().unique()
@@ -229,7 +229,7 @@ def main():
     log.info("  %s / %s known  (%.1f%%)",
              f"{df['symspell_latin_known'].sum():,}", f"{len(df):,}", pct_b)
 
-    # ── Corrections (combined unknowns, single pass) ──────────────────────────
+    # Corrections (combined unknowns, single pass)
     log.info("")
     log.info("[corrections — combined A+B unknowns, ideographic excluded]")
 
@@ -247,7 +247,7 @@ def main():
 
     corr_map = symspell_corrections(all_unknowns, sym, args.workers)
 
-    # ── Map corrections back to df ────────────────────────────────────────────
+    # Map corrections back to df
     log.info("")
     log.info("[mapping corrections to dataframe]")
 
@@ -266,7 +266,7 @@ def main():
     log.info("  Orig  corrections: %s", f"{n_orig_corr:,}")
     log.info("  Latin corrections: %s", f"{n_latin_corr:,}")
 
-    # ── Save ──────────────────────────────────────────────────────────────────
+    # Save
     OUTPUT_PATH.parent.mkdir(exist_ok=True)
     log.info("Saving to %s…", OUTPUT_PATH)
     df.to_parquet(OUTPUT_PATH, index=False)

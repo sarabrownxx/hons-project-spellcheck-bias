@@ -40,8 +40,7 @@ import requests
 import ethnicolr
 from langdetect import DetectorFactory, detect_langs, LangDetectException
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-
+# Config
 INPUT_PATH        = Path("data/names_base.parquet")
 PARQUET_PATH      = Path("data/names_results_base.parquet")
 SAMPLE_SIZE       = 1000          # Names queried against nationalize.io
@@ -53,8 +52,7 @@ NATIONALIZE_KEY   = os.getenv("NATIONALIZE_KEY")  # Optional free key
 
 DetectorFactory.seed = 0  # Reproducible langdetect results
 
-# ── ethnicolr column mapping ───────────────────────────────────────────────────
-
+# ethnicolr column mapping
 ETH_COL_MAP = {
     "Asian,GreaterEastAsian,EastAsian":       "eth_EastAsian",
     "Asian,GreaterEastAsian,Japanese":        "eth_Japanese",
@@ -75,8 +73,7 @@ ETH_COL_MAP = {
 RACE_SHORT = {full: col.replace("eth_", "") for full, col in ETH_COL_MAP.items()}
 
 
-# ── Country name → ISO alpha-2 ─────────────────────────────────────────────────
-
+# Country name → ISO alpha-2
 def build_country_map():
     """Build a lookup dict from the country name variants pycountry knows about."""
     mapping = {}
@@ -100,8 +97,7 @@ def to_iso2(country_name, country_map):
         return None
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
+# Helpers
 def _lang_name(code):
     """Convert an ISO 639-1 language code (e.g. 'fr', 'zh-cn') to a full name."""
     if not code or pd.isna(code):
@@ -150,8 +146,7 @@ def _consolidate_ethnicolr(df):
     df.drop(columns=eth_col_names, inplace=True)
 
 
-# ── Step 1: ethnicolr ──────────────────────────────────────────────────────────
-
+# Step 1: ethnicolr
 def _run_ethnicolr_on_column(df, name_col):
     """
     Run ethnicolr on a name column and return a DataFrame of predictions
@@ -196,7 +191,7 @@ def run_ethnicolr(df):
         df[col] = np.nan
     df["ethnicolr_race"] = pd.NA
 
-    # ── Pass 1: original names ─────────────────────────────────────────────
+    # Pass 1: original names
     print(f"  Pass 1: original names ({n:,} rows in {(n + ETHNICOLR_BATCH - 1) // ETHNICOLR_BATCH} batches)…", flush=True)
     pred1 = _run_ethnicolr_on_column(df, "name")
     if not pred1.empty:
@@ -206,7 +201,7 @@ def run_ethnicolr(df):
         if "race" in pred1.columns:
             df.loc[pred1.index, "ethnicolr_race"] = pred1["race"].values
 
-    # ── Pass 2: name_latin for non-Latin names ─────────────────────────────
+    # Pass 2: name_latin for non-Latin names
     if "name_latin" not in df.columns:
         print("  name_latin column not found — skipping second pass. "
               "Run preprocess_names.py first for full coverage.", flush=True)
@@ -247,8 +242,7 @@ def run_ethnicolr(df):
     return df
 
 
-# ── Step 2: langdetect ─────────────────────────────────────────────────────────
-
+# Step 2: langdetect
 def _detect_one(name):
     """Return (lang_code, probability) for a single name, or (None, None) on failure."""
     try:
@@ -277,8 +271,7 @@ def run_langdetect(df):
     return df
 
 
-# ── Step 3: nationalize.io sample ─────────────────────────────────────────────
-
+# Step 3: nationalize.io sample
 def _fetch_nationalize(names, api_key=None):
     """
     POST a batch of names to nationalize.io.
@@ -359,8 +352,7 @@ def run_nationalize_sample(df, country_map):
     return df
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
+# Main
 def main():
     print(f"Loading {INPUT_PATH}…", flush=True)
     df = pd.read_parquet(INPUT_PATH)
@@ -376,7 +368,7 @@ def main():
         df.to_parquet(PARQUET_PATH, index=False)
         print(f"  Checkpoint saved to {PARQUET_PATH}", flush=True)
 
-    # ── 1. ethnicolr ──────────────────────────────────────────────────────────
+    # 1. ethnicolr
     print("[1/3] ethnicolr — running on all names…")
     t0 = time.time()
     df = run_ethnicolr(df)
@@ -385,7 +377,7 @@ def main():
     df["n_models_used"] += (~df["ethnicolr_race"].isna()).astype(int)
     checkpoint("ethnicolr")
 
-    # ── 2. langdetect ─────────────────────────────────────────────────────────
+    # 2. langdetect
     print("\n[2/3] langdetect — running on all names…")
     t0 = time.time()
     df = run_langdetect(df)
@@ -393,7 +385,7 @@ def main():
     df["n_models_used"] += (~df["langdetect_lang"].isna()).astype(int)
     checkpoint("langdetect")
 
-    # ── 3. nationalize.io ─────────────────────────────────────────────────────
+    # 3. nationalize.io
     print("\n[3/3] nationalize.io — querying sample…")
     if NATIONALIZE_KEY:
         print(f"  Using API key (1 000 req/day limit)")
@@ -404,7 +396,7 @@ def main():
     df = run_nationalize_sample(df, country_map)
     print(f"  Done in {time.time() - t0:.0f}s\n")
 
-    # ── Country language comparison ────────────────────────────────────────────
+    # Country language comparison
     print("\nAdding top_country_langs and country_lang_comp…", flush=True)
     unique_countries = df["top_country"].dropna().unique()
     langs_lookup = {c: _country_langs(c, country_map) for c in unique_countries}
@@ -415,7 +407,7 @@ def main():
         axis=1,
     )
 
-    # ── Column ordering ───────────────────────────────────────────────────────
+    # Column ordering
     desired_order = [
         "name",
         "full_countries_distribution",
@@ -430,12 +422,12 @@ def main():
     remaining = [c for c in df.columns if c not in ordered]
     df = df[ordered + remaining]
 
-    # ── Final save ────────────────────────────────────────────────────────────
+    # Final save
     print(f"Saving to {PARQUET_PATH}…", flush=True)
     df.to_parquet(PARQUET_PATH, index=False)
     print("Saved.\n")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # Summary
     print("── ethnicolr top category distribution (sample of 10) ──")
     print(df["ethnicolr_race"].value_counts().head(10).to_string())
 

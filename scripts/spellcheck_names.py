@@ -57,8 +57,7 @@ load_dotenv()
 import pandas as pd
 import enchant
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-
+# Configuration
 PARQUET_PATH  = Path("data/names_results_base.parquet")
 LOGS_DIR      = Path("logs")
 
@@ -66,8 +65,7 @@ LOGS_DIR      = Path("logs")
 # making Condition A corrections meaningless (spurious edit-distance matches).
 IDEOGRAPHIC_SCRIPTS = {"CJK", "Hangul", "Hiragana", "Katakana"}
 
-# ── Logging ────────────────────────────────────────────────────────────────────
-
+# Logging
 def setup_logging(timestamp: str) -> Path:
     LOGS_DIR.mkdir(exist_ok=True)
     log_path = LOGS_DIR / ("spellcheck_" + timestamp + ".log")
@@ -94,8 +92,7 @@ def _pkg(name):
         return "unknown"
 
 
-# ── Checker implementations ────────────────────────────────────────────────────
-
+# Checker implementations
 def hunspell_batch_known(words: list, d: enchant.Dict) -> set:
     """Return the subset of words that hunspell (en_US) considers correct."""
     known = set()
@@ -138,8 +135,7 @@ def hunspell_corrections(unknowns: set, d: enchant.Dict) -> dict:
     return result
 
 
-# ── Core check runner ──────────────────────────────────────────────────────────
-
+# Core check runner
 def run_checker(df: pd.DataFrame,
                 name_col: str,
                 batch_known_fn,
@@ -163,8 +159,7 @@ def run_checker(df: pd.DataFrame,
     return df
 
 
-# ── Run all checkers ───────────────────────────────────────────────────────────
-
+# Run all checkers
 def run_all_checkers(df: pd.DataFrame) -> tuple:
     t0 = time.time()
 
@@ -240,8 +235,7 @@ def _country_breakdown(df: pd.DataFrame) -> dict:
     return result
 
 
-# ── Report ─────────────────────────────────────────────────────────────────────
-
+# Report
 def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
     lines = []
 
@@ -363,8 +357,7 @@ def write_report(run_meta: dict, stats: dict, report_path: Path) -> None:
     log.info("Report written to %s", report_path)
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
+# Main
 def main():
     timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
     LOGS_DIR.mkdir(exist_ok=True)
@@ -387,7 +380,7 @@ def main():
         "log_path":       str(log_path),
     }
 
-    # ── Load ──────────────────────────────────────────────────────────────────
+    # Load
     log.info("Loading %s…", PARQUET_PATH)
     df = pd.read_parquet(PARQUET_PATH)
     log.info("  %s names loaded", f"{len(df):,}")
@@ -397,16 +390,16 @@ def main():
         log.error("Missing columns: %s — run preprocess_names.py first.", missing)
         sys.exit(1)
 
-    # ── Run all checkers ──────────────────────────────────────────────────────
+    # Run all checkers
     df, stats = run_all_checkers(df)
 
-    # ── Save ──────────────────────────────────────────────────────────────────
+    # Save
     log.info("")
     log.info("Saving to %s…", PARQUET_PATH)
     df.to_parquet(PARQUET_PATH, index=False)
     log.info("Saved.")
 
-    # ── Report ────────────────────────────────────────────────────────────────
+    # Report
     write_report(run_meta, stats, report_path)
 
     log.info("")
