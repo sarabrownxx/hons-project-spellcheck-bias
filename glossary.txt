@@ -1,2 +1,0 @@
-lexicography - principles and practices of compiling dictionaries
-orthography - aspect of language study regarding letters and spelling
